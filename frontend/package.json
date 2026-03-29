@@ -1,0 +1,18 @@
+{
+  "name": "ai-trading-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-auto": "^3",
+    "@sveltejs/kit": "^2",
+    "@sveltejs/vite-plugin-svelte": "^3",
+    "svelte": "^4",
+    "typescript": "^5",
+    "vite": "^5"
+  }
+}
