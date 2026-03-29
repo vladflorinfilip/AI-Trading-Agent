@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -9,9 +10,12 @@ from typing import Any
 import yaml
 from google import genai
 from google.genai import types
+from google.genai.errors import ClientError
 
 from ..config import AgentConfig
 from ..kraken_client import KrakenClient
+
+MAX_RETRIES = 5
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +26,12 @@ def load_prompt(name: str) -> dict[str, Any]:
     path = PROMPTS_DIR / f"{name}.yaml"
     with open(path) as f:
         return yaml.safe_load(f)
+
+
+def _parse_retry_delay(error_msg: str) -> float:
+    """Extract retry delay from a 429 error message, default 15s."""
+    match = re.search(r"retry in (\d+\.?\d*)", error_msg, re.IGNORECASE)
+    return float(match.group(1)) if match else 15.0
 
 
 class TradingAgent(ABC):
@@ -43,7 +53,8 @@ class TradingAgent(ABC):
         )
         self.tools = tools
         self._gen_config = self._build_gen_config()
-        log.info("[%s] ready | model=%s | %d tools", self.name, cfg.gemini.model, len(self.tools))
+        key_preview = (cfg.gemini.api_key or "")[:8] + "..."
+        log.info("[%s] ready | model=%s | %d tools | key=%s", self.name, cfg.gemini.model, len(self.tools), key_preview)
 
     def _build_gen_config(self) -> types.GenerateContentConfig:
         system_prompt = self.prompt_data["system_prompt"]
@@ -77,6 +88,23 @@ class TradingAgent(ABC):
             log.error("[%s] %s failed: %s", self.name, name, e)
             return {"error": str(e)}
 
+    def _call_gemini(self, contents: list[types.Content]):
+        """Call Gemini with automatic retry on rate-limit (429)."""
+        for attempt in range(MAX_RETRIES):
+            try:
+                return self.client.models.generate_content(
+                    model=self.cfg.gemini.model,
+                    contents=contents,
+                    config=self._gen_config,
+                )
+            except ClientError as e:
+                is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
+                if not is_rate_limit or attempt == MAX_RETRIES - 1:
+                    raise
+                wait = _parse_retry_delay(str(e))
+                log.info("[%s] rate limited, waiting %.0fs...", self.name, wait)
+                time.sleep(wait)
+
     def run(self, user_message: str) -> str:
         """Single turn: user message -> (tool calls)* -> final text response."""
         log.info("[%s] run | %.100s", self.name, user_message)
@@ -87,11 +115,7 @@ class TradingAgent(ABC):
         ]
 
         for i in range(1, self.cfg.max_agent_iterations + 1):
-            response = self.client.models.generate_content(
-                model=self.cfg.gemini.model,
-                contents=contents,
-                config=self._gen_config,
-            )
+            response = self._call_gemini(contents)
 
             if not response.candidates:
                 log.warning("[%s] empty response from model", self.name)

@@ -80,10 +80,10 @@ class KrakenClient:
         return self._run("paper", "balance")
 
     def paper_buy(self, pair: str, volume: str, **kwargs: str) -> dict:
-        return self._build_order("paper", "buy", pair, volume, **kwargs)
+        return self._build_order("paper", "buy", pair=pair, volume=volume, **kwargs)
 
     def paper_sell(self, pair: str, volume: str, **kwargs: str) -> dict:
-        return self._build_order("paper", "sell", pair, volume, **kwargs)
+        return self._build_order("paper", "sell", pair=pair, volume=volume, **kwargs)
 
     def paper_positions(self) -> dict:
         return self._run("paper", "positions")
@@ -97,10 +97,10 @@ class KrakenClient:
         return self._run("balance")
 
     def buy(self, pair: str, volume: str, **kwargs: str) -> dict:
-        return self._build_order("trade", "buy", pair, volume, **kwargs)
+        return self._build_order("trade", "buy", pair=pair, volume=volume, **kwargs)
 
     def sell(self, pair: str, volume: str, **kwargs: str) -> dict:
-        return self._build_order("trade", "sell", pair, volume, **kwargs)
+        return self._build_order("trade", "sell", pair=pair, volume=volume, **kwargs)
 
     def open_orders(self) -> dict:
         return self._run("open-orders")
