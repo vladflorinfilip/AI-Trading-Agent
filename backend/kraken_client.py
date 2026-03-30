@@ -86,7 +86,10 @@ class KrakenClient:
         return self._build_order("paper", "sell", pair=pair, volume=volume, **kwargs)
 
     def paper_positions(self) -> dict:
-        return self._run("paper", "positions")
+        return self._run("paper", "orders")
+
+    def paper_status(self) -> dict:
+        return self._run("paper", "status")
 
     def paper_history(self) -> dict:
         return self._run("paper", "history")
