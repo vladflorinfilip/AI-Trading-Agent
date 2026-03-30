@@ -106,9 +106,15 @@ class TradingAgent(ABC):
                 time.sleep(wait)
 
     def run(self, user_message: str) -> str:
-        """Single turn: user message -> (tool calls)* -> final text response."""
+        """Single turn: user message -> final text response."""
+        result = self.run_traced(user_message)
+        return result["response"]
+
+    def run_traced(self, user_message: str) -> dict[str, Any]:
+        """Like run(), but returns full trace: response, tool_calls, timing."""
         log.info("[%s] run | %.100s", self.name, user_message)
         t_start = time.perf_counter()
+        traced_tools: list[dict[str, Any]] = []
 
         contents: list[types.Content] = [
             types.Content(role="user", parts=[types.Part.from_text(text=user_message)]),
@@ -119,7 +125,7 @@ class TradingAgent(ABC):
 
             if not response.candidates:
                 log.warning("[%s] empty response from model", self.name)
-                return "[no response from model]"
+                return self._trace_result("[no response from model]", traced_tools, t_start)
 
             parts = response.candidates[0].content.parts
             tool_calls = [p for p in parts if p.function_call]
@@ -128,7 +134,7 @@ class TradingAgent(ABC):
                 text = "".join(p.text for p in parts if p.text)
                 ms = (time.perf_counter() - t_start) * 1000
                 log.info("[%s] done | %d steps | %.0fms", self.name, i, ms)
-                return text
+                return self._trace_result(text, traced_tools, t_start)
 
             log.info("[%s] step %d | tools: %s",
                      self.name, i, ", ".join(p.function_call.name for p in tool_calls))
@@ -137,7 +143,16 @@ class TradingAgent(ABC):
             tool_responses: list[types.Part] = []
             for part in tool_calls:
                 fc = part.function_call
-                result = self.dispatch_tool(fc.name, dict(fc.args))
+                t_tool = time.perf_counter()
+                args = dict(fc.args)
+                result = self.dispatch_tool(fc.name, args)
+                traced_tools.append({
+                    "step": i,
+                    "name": fc.name,
+                    "args": args,
+                    "result": result,
+                    "duration_ms": round((time.perf_counter() - t_tool) * 1000),
+                })
                 tool_responses.append(
                     types.Part.from_function_response(
                         name=fc.name, response={"result": result},
@@ -146,4 +161,12 @@ class TradingAgent(ABC):
             contents.append(types.Content(role="user", parts=tool_responses))
 
         log.warning("[%s] max iterations reached", self.name)
-        return "[max iterations reached]"
+        return self._trace_result("[max iterations reached]", traced_tools, t_start)
+
+    def _trace_result(self, response: str, tool_calls: list, t_start: float) -> dict[str, Any]:
+        return {
+            "agent": self.name,
+            "response": response,
+            "tool_calls": tool_calls,
+            "duration_ms": round((time.perf_counter() - t_start) * 1000),
+        }

@@ -59,3 +59,4 @@ class AgentConfig:
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
     max_agent_iterations: int = field(default_factory=lambda: int(_get("agent", "max_iterations", default=20)))
     log_level: str = field(default_factory=lambda: _get("agent", "log_level", default="INFO"))
+    trading_pairs: list[str] = field(default_factory=lambda: _get("trading", "pairs", default=["BTC/USD", "ETH/USD"]))
