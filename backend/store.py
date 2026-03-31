@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -17,8 +18,12 @@ _RUN_PREFIX = "pipeline_run:"
 _TTL_SECONDS = 14 * 24 * 3600  # 14 days
 
 
+DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+
+
 class RunStore:
-    def __init__(self, redis_url: str = "redis://localhost:6379/0"):
+    def __init__(self, redis_url: str | None = None):
+        redis_url = redis_url or os.environ.get("REDIS_URL", DEFAULT_REDIS_URL)
         try:
             self.r = redis.from_url(redis_url, decode_responses=True)
             self.r.ping()

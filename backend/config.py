@@ -35,7 +35,7 @@ def _get(section: str, key: str, env_var: str | None = None, default: Any = None
 
 @dataclass
 class KrakenConfig:
-    cli_binary: str = field(default_factory=lambda: _get("kraken", "cli_binary", default="kraken"))
+    cli_binary: str = field(default_factory=lambda: _get("kraken", "cli_binary", env_var="KRAKEN_CLI_BINARY", default="kraken"))
     api_key: str = field(default_factory=lambda: _get("kraken", "api_key", env_var="KRAKEN_API_KEY", default=""))
     api_secret: str = field(default_factory=lambda: _get("kraken", "api_secret", env_var="KRAKEN_API_SECRET", default=""))
     paper_mode: bool = field(default_factory=lambda: _get("kraken", "paper_mode", default=True))

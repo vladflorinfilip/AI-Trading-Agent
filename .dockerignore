@@ -1,0 +1,9 @@
+.git
+.venv
+__pycache__
+*.pyc
+.env
+frontend/
+node_modules/
+.cursor/
+ai_trading_agent/
