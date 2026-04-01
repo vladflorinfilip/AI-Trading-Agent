@@ -1,5 +1,5 @@
 kraken:
-  cli_binary: /Users/vlad.filip/Desktop/Projects/kraken-cli/target/release/kraken
+  cli_binary: ./kraken
   paper_mode: true
   default_currency: USD
   paper_starting_balance: 10000.0
