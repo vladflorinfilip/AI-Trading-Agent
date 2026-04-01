@@ -9,7 +9,7 @@ ENV DOCKER=1
 RUN npm run build
 
 # ---- Stage 2: serve with nginx + reverse proxy to backend ----
-FROM nginx:alpine
+FROM nginx:1.27-alpine
 COPY --from=build /app/build /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 ENV BACKEND_URL=http://backend:8000
