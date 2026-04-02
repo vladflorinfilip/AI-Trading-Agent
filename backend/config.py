@@ -47,6 +47,7 @@ class KrakenConfig:
 class GeminiConfig:
     model: str = field(default_factory=lambda: _get("gemini", "model", default="gemini-3.1-pro-preview"))
     api_key: str = field(default_factory=lambda: _get("gemini", "api_key", env_var="GOOGLE_CLOUD_API_KEY", default=""))
+    fallback_api_key: str = field(default_factory=lambda: _get("gemini", "fallback_api_key", env_var="GOOGLE_CLOUD_API_KEY_FALLBACK", default=""))
     use_vertex: bool = field(default_factory=lambda: _get("gemini", "use_vertex", default=True))
     temperature: float = field(default_factory=lambda: float(_get("gemini", "temperature", default=1.0)))
     max_output_tokens: int = field(default_factory=lambda: int(_get("gemini", "max_output_tokens", default=65535)))
