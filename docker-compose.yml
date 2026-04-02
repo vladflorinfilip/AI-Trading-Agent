@@ -1,0 +1,27 @@
+services:
+  backend:
+    build: .
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - KRAKEN_CLI_BINARY=kraken
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  redis-data:
