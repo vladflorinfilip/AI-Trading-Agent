@@ -1,4 +1,10 @@
-const BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:8000' : '');
+declare global {
+	interface Window { __API_URL__?: string; }
+}
+
+const BASE = (typeof window !== 'undefined' && window.__API_URL__)
+	? window.__API_URL__
+	: (import.meta.env.DEV ? 'http://localhost:8000' : '');
 
 async function get<T>(path: string): Promise<T> {
 	const res = await fetch(`${BASE}${path}`);
