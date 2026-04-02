@@ -14,6 +14,12 @@ trading:
     - BTC/USD
     - ETH/USD
 
+identity:
+  agent_id: 1
+  agent_wallet: "0x0000000000000000000000000000000000000000"  # replace with real wallet
+  deadline_buffer_seconds: 300   # intents expire 5 minutes after creation
+  default_max_slippage_bps: 50   # 0.5% max slippage
+
 agent:
   max_iterations: 20
   log_level: INFO

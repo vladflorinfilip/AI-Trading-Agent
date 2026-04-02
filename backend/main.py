@@ -46,9 +46,20 @@ def demo_single_agent():
     except KrakenCLIError:
         pass  # already initialized
 
-    reply = agent.run(SINGLE_AGENT_PROMPT)
-    print("\n--- Agent response ---")
-    print(reply)
+    # run + build trade intent 
+    analysis, intent = agent.run_trade_intent(SINGLE_AGENT_PROMPT)
+
+    print("\n--- Agent analysis ---")
+    print(analysis)
+
+    print("\n--- TradeIntent (on-chain struct) ---")
+    if intent is None:
+        print("No intent produced (extraction failed).")
+    elif not intent.is_actionable():
+        print(f"Action: HOLD — no on-chain submission needed.")
+        print(intent.to_json())
+    else:
+        print(intent.to_json())
 
 
 def demo_multi_agent():

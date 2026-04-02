@@ -54,9 +54,21 @@ class GeminiConfig:
 
 
 @dataclass
+class AgentIdentityConfig:
+    """On-chain identity of this agent — must match the AgentRegistry contract."""
+    agent_id: int = field(default_factory=lambda: int(_get("identity", "agent_id", env_var="AGENT_ID", default=0)))
+    agent_wallet: str = field(default_factory=lambda: _get("identity", "agent_wallet", env_var="AGENT_WALLET", default="0x0000000000000000000000000000000000000000"))
+    # How far ahead (seconds) to set the on-chain deadline for each TradeIntent.
+    deadline_buffer_seconds: int = field(default_factory=lambda: int(_get("identity", "deadline_buffer_seconds", default=300)))
+    # Default max slippage in basis points (50 bps = 0.5%).
+    default_max_slippage_bps: int = field(default_factory=lambda: int(_get("identity", "default_max_slippage_bps", default=50)))
+
+
+@dataclass
 class AgentConfig:
     kraken: KrakenConfig = field(default_factory=KrakenConfig)
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
+    identity: AgentIdentityConfig = field(default_factory=AgentIdentityConfig)
     max_agent_iterations: int = field(default_factory=lambda: int(_get("agent", "max_iterations", default=20)))
     log_level: str = field(default_factory=lambda: _get("agent", "log_level", default="INFO"))
     trading_pairs: list[str] = field(default_factory=lambda: _get("trading", "pairs", default=["BTC/USD", "ETH/USD"]))
