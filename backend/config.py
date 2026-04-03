@@ -57,10 +57,10 @@ class GeminiConfig:
 class AgentIdentityConfig:
     """On-chain identity of this agent — must match the AgentRegistry contract."""
     agent_id: int = field(default_factory=lambda: int(_get("identity", "agent_id", env_var="AGENT_ID", default=0)))
-    agent_wallet: str = field(default_factory=lambda: _get("identity", "agent_wallet", env_var="AGENT_WALLET", default="0x0000000000000000000000000000000000000000"))
-    # How far ahead (seconds) to set the on-chain deadline for each TradeIntent.
+    agent_wallet: str = field(default_factory=lambda: _get("identity", "agent_wallet", env_var="WALLET_ADDRESS", default="0x0000000000000000000000000000000000000000"))
+    chain: str = field(default_factory=lambda: _get("identity", "chain", default="sepolia"))
+    registry_address: str = field(default_factory=lambda: _get("identity", "registry_address", env_var="AGENT_REGISTRY_ADDRESS", default="0x0000000000000000000000000000000000000000"))
     deadline_buffer_seconds: int = field(default_factory=lambda: int(_get("identity", "deadline_buffer_seconds", default=300)))
-    # Default max slippage in basis points (50 bps = 0.5%).
     default_max_slippage_bps: int = field(default_factory=lambda: int(_get("identity", "default_max_slippage_bps", default=50)))
 
 
