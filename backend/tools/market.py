@@ -14,12 +14,24 @@ MARKET_TOOLS: list[types.FunctionDeclaration] = [
     ),
     types.FunctionDeclaration(
         name="ohlc",
-        description="Get OHLC (open, high, low, close) candle data for a pair.",
+        description=(
+            "Get OHLC candlestick data for a trading pair. "
+            "Returns an array of candles, each with fields: "
+            "time (unix timestamp), open, high, low, close, vwap (volume-weighted avg price), "
+            "volume, and count (number of trades). "
+            "Use interval=60 for 1-hour candles (recommended for swing trading). "
+            "Typically returns the last 720 candles. "
+            "Use the closing prices to compute moving averages, identify trend direction, "
+            "and find support (lowest low) and resistance (highest high) levels."
+        ),
         parameters=types.Schema(
             type="OBJECT",
             properties={
-                "pair": types.Schema(type="STRING", description="e.g. ETH/USD"),
-                "interval": types.Schema(type="INTEGER", description="Candle interval in minutes (default 60)"),
+                "pair": types.Schema(type="STRING", description="Trading pair, e.g. BTC/USD or ETH/USD"),
+                "interval": types.Schema(
+                    type="INTEGER",
+                    description="Candle interval in minutes. Common values: 1, 5, 15, 30, 60, 240, 1440. Default: 60",
+                ),
             },
             required=["pair"],
         ),

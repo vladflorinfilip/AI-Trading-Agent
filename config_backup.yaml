@@ -1,0 +1,15 @@
+kraken:
+  cli_binary: /Users/ayesha.samarawickrama/.cargo/bin/kraken
+  paper_mode: true
+  default_currency: USD
+  paper_starting_balance: 10000.0
+
+gemini:
+  model: gemini-2.5-flash
+  use_vertex: false
+  temperature: 1.0
+  max_output_tokens: 65535
+
+agent:
+  max_iterations: 20
+  log_level: INFO

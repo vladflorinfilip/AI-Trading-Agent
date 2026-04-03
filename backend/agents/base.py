@@ -57,7 +57,20 @@ class TradingAgent(ABC):
         log.info("[%s] ready | model=%s | %d tools | key=%s", self.name, cfg.gemini.model, len(self.tools), key_preview)
 
     def _build_gen_config(self) -> types.GenerateContentConfig:
+        template_vars = {
+            "pairs": ", ".join(self.cfg.trading_pairs),
+            "mode": "paper trading (simulated)" if self.cfg.kraken.paper_mode else "LIVE trading (real money)",
+            "buy_fn": "paper_buy" if self.cfg.kraken.paper_mode else "buy",
+            "sell_fn": "paper_sell" if self.cfg.kraken.paper_mode else "sell",
+            "balance_fn": "paper_balance" if self.cfg.kraken.paper_mode else "balance",
+        }
+
         system_prompt = self.prompt_data["system_prompt"]
+        try:
+            system_prompt = system_prompt.format(**template_vars)
+        except KeyError:
+            pass
+
         constraints = self.prompt_data.get("constraints", [])
         if constraints:
             system_prompt += "\n\nConstraints:\n" + "\n".join(
