@@ -47,14 +47,39 @@ class TradingAgent(ABC):
         self.kraken = KrakenClient(cfg.kraken)
         self.prompt_data = load_prompt(prompt_name)
         self.name = self.prompt_data.get("role", self.__class__.__name__)
+        self._api_keys: list[str] = [k for k in [cfg.gemini.api_key, cfg.gemini.fallback_api_key] if k]
+        self._active_key_idx = 0
         self.client = genai.Client(
             vertexai=cfg.gemini.use_vertex,
-            api_key=cfg.gemini.api_key or None,
+            api_key=self._active_api_key or None,
         )
         self.tools = tools
         self._gen_config = self._build_gen_config()
-        key_preview = (cfg.gemini.api_key or "")[:8] + "..."
-        log.info("[%s] ready | model=%s | %d tools | key=%s", self.name, cfg.gemini.model, len(self.tools), key_preview)
+        key_preview = (self._active_api_key or "")[:8] + "..."
+        log.info("[%s] ready | model=%s | %d tools | key=%s | %d key(s) available",
+                 self.name, cfg.gemini.model, len(self.tools), key_preview, len(self._api_keys))
+
+    @property
+    def _active_api_key(self) -> str:
+        if not self._api_keys:
+            return ""
+        return self._api_keys[self._active_key_idx]
+
+    def _swap_to_next_key(self) -> bool:
+        """Switch to the next available API key. Returns True if a swap occurred."""
+        if len(self._api_keys) <= 1:
+            return False
+        prev_idx = self._active_key_idx
+        self._active_key_idx = (self._active_key_idx + 1) % len(self._api_keys)
+        if self._active_key_idx == prev_idx:
+            return False
+        self.client = genai.Client(
+            vertexai=self.cfg.gemini.use_vertex,
+            api_key=self._active_api_key or None,
+        )
+        key_preview = (self._active_api_key or "")[:8] + "..."
+        log.info("[%s] swapped to fallback API key %s", self.name, key_preview)
+        return True
 
     def _build_gen_config(self) -> types.GenerateContentConfig:
         template_vars = {
@@ -102,7 +127,7 @@ class TradingAgent(ABC):
             return {"error": str(e)}
 
     def _call_gemini(self, contents: list[types.Content]):
-        """Call Gemini with automatic retry on rate-limit (429)."""
+        """Call Gemini with automatic key failover and retry on rate-limit (429)."""
         for attempt in range(MAX_RETRIES):
             try:
                 return self.client.models.generate_content(
@@ -114,8 +139,11 @@ class TradingAgent(ABC):
                 is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
                 if not is_rate_limit or attempt == MAX_RETRIES - 1:
                     raise
+                if self._swap_to_next_key():
+                    log.info("[%s] rate limited on key, retrying immediately with fallback key", self.name)
+                    continue
                 wait = _parse_retry_delay(str(e))
-                log.info("[%s] rate limited, waiting %.0fs...", self.name, wait)
+                log.info("[%s] rate limited (all keys exhausted), waiting %.0fs...", self.name, wait)
                 time.sleep(wait)
 
     def run(self, user_message: str) -> str:
