@@ -89,6 +89,12 @@ requirements.txt        # Python dependencies
 .env                    # API keys (not committed)
 ```
 
+## ERC-8004 On-Chain Agent (erc8004/)
+
+The `erc8004/` directory contains the on-chain agent loop — ERC-8004 identity, EIP-712 checkpoints, Risk Router validation, and Kraken trade execution. It is based on the [AI Trading Agent Template](https://github.com/Stephen-Kimoi/ai-trading-agent-template) by Stephen Kimoi (MIT License), with modifications to integrate with our Python multi-agent pipeline.
+
+Our custom strategy (`src/agent/python-api-strategy.ts`) calls the Python backend's `/api/pipeline/run` endpoint so that every trading decision is made by the Analyst → Trader → RiskManager pipeline, then signed and validated on-chain by the template scaffolding.
+
 ## License
 
 See [LICENSE](LICENSE).
