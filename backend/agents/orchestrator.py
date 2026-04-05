@@ -13,13 +13,14 @@ from .risk_manager import RiskManager
 def _extract_decision(trader_response: str) -> str:
     """Pull BUY/SELL/HOLD from the trader's response text."""
     upper = trader_response.upper()
-    for tc in trader_response.split():
-        pass
-    if re.search(r"\bBUY\b", upper):
-        has_sell = bool(re.search(r"\bSELL\b", upper))
-        if not has_sell:
-            return "BUY"
-    if re.search(r"\bSELL\b", upper):
+    tag = re.search(r"DECISION[:\-\s]+(BUY|SELL|HOLD)", upper)
+    if tag:
+        return tag.group(1)
+    first_buy = upper.find("BUY")
+    first_sell = upper.find("SELL")
+    if first_buy >= 0 and (first_sell < 0 or first_buy < first_sell):
+        return "BUY"
+    if first_sell >= 0:
         return "SELL"
     return "HOLD"
 

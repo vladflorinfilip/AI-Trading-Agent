@@ -45,6 +45,7 @@ export interface RiskValidationResult {
   approved: boolean;
   reason: string;
   intentHash?: string;
+  txHash?: string;
 }
 
 export class RiskRouterClient {
@@ -136,7 +137,10 @@ export class RiskRouterClient {
 
   /**
    * Submit a signed TradeIntent to the RiskRouter for validation.
-   * This is the state-changing call — updates nonce + trade record if approved.
+   *
+   * ethers v6: state-changing calls return a ContractTransactionResponse, not
+   * the Solidity return values.  We do a staticCall pre-flight to get the
+   * (approved, reason) tuple, then send the real tx and confirm via events.
    */
   async submitIntent(signed: SignedTradeIntent): Promise<RiskValidationResult> {
     const intentStruct = [
@@ -150,12 +154,56 @@ export class RiskRouterClient {
       signed.intent.deadline,
     ];
 
-    const result = await this.contract.submitTradeIntent(intentStruct, signed.signature);
+    // 1. Pre-flight: staticCall returns (bool approved, string reason) without state change
+    const [approved, reason] = await this.contract.submitTradeIntent.staticCall(
+      intentStruct,
+      signed.signature
+    );
+
+    if (!approved) {
+      return { approved: false, reason, intentHash: signed.intentHash };
+    }
+
+    // 2. Send the actual state-changing tx
+    const tx = await this.contract.submitTradeIntent(intentStruct, signed.signature);
+    const receipt = await tx.wait();
+
+    // 3. Confirm via emitted events
+    const confirmation = this.parseTradeEvents(receipt, signed.intent.agentId);
+
     return {
-      approved: result[0],
-      reason: result[1],
+      approved: confirmation.approved,
+      reason: confirmation.reason,
       intentHash: signed.intentHash,
+      txHash: receipt.hash,
     };
+  }
+
+  /**
+   * Parse TradeApproved / TradeRejected events from a tx receipt.
+   */
+  private parseTradeEvents(
+    receipt: ethers.TransactionReceipt,
+    agentId: bigint
+  ): { approved: boolean; reason: string } {
+    const iface = new ethers.Interface(RISK_ROUTER_ABI);
+
+    for (const log of receipt.logs) {
+      try {
+        const parsed = iface.parseLog({ topics: log.topics as string[], data: log.data });
+        if (!parsed) continue;
+
+        if (parsed.name === "TradeApproved" && parsed.args.agentId === agentId) {
+          return { approved: true, reason: "" };
+        }
+        if (parsed.name === "TradeRejected" && parsed.args.agentId === agentId) {
+          return { approved: false, reason: parsed.args.reason };
+        }
+      } catch { /* not our event */ }
+    }
+
+    // staticCall said approved but no confirming event — treat as success
+    return { approved: true, reason: "" };
   }
 
   /**
