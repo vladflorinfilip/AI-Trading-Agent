@@ -17,6 +17,17 @@ services:
       - backend
     restart: unless-stopped
 
+  erc8004:
+    build:
+      context: .
+      dockerfile: erc8004/Dockerfile
+    env_file: ./erc8004/.env
+    environment:
+      - PYTHON_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     volumes:

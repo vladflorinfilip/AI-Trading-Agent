@@ -1,0 +1,12 @@
+[build]
+# Railway: set this service's "Root Directory" to "/" (repo root) in the dashboard
+# so it can access the kraken binary. Then this path is relative to repo root.
+dockerfilePath = "erc8004/Dockerfile"
+
+[deploy]
+# Worker service — no healthcheck, no public port
+# Required env vars (set in Railway dashboard):
+#   PYTHON_API_URL=https://<your-backend>.up.railway.app
+#   SEPOLIA_RPC_URL, PRIVATE_KEY, AGENT_ID
+#   AGENT_REGISTRY_ADDRESS, HACKATHON_VAULT_ADDRESS, RISK_ROUTER_ADDRESS
+#   REPUTATION_REGISTRY_ADDRESS, VALIDATION_REGISTRY_ADDRESS
