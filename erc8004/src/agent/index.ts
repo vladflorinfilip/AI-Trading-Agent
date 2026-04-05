@@ -89,9 +89,9 @@ export async function runAgent(strategy: TradingStrategy) {
     }))}`,
   });
 
-  // Fetch registration to confirm agentWallet
+  // Fetch on-chain registration and verify agentWallet matches
   const reg = await getAgentRegistration(provider, registryAddress, agentId);
-  console.log(`[agent] agentWallet: ${reg.agentWallet}`);
+  console.log(`[agent] On-chain agentWallet: ${reg.agentWallet}`);
 
   // Init clients
   const kraken     = new KrakenClient();
@@ -143,16 +143,17 @@ export async function runAgent(strategy: TradingStrategy) {
 
         console.log(`[agent] TradeIntent signed. nonce=${intent.nonce}, deadline=${new Date(Number(intent.deadline) * 1000).toISOString()}`);
 
-        // 4b. Submit to RiskRouter — on-chain validation
+        // 4b. Submit to RiskRouter — on-chain validation + event confirmation
         const validation_result = await riskRouter.submitIntent(signed);
 
         if (!validation_result.approved) {
           console.warn(`[agent] TradeIntent REJECTED by RiskRouter: ${validation_result.reason}`);
-          // Don't execute — fall through to checkpoint (HOLD behaviour)
           decision.action = "HOLD";
           decision.amount = 0;
           decision.reasoning += ` [BLOCKED by RiskRouter: ${validation_result.reason}]`;
         } else {
+          console.log(`[agent] TradeApproved on-chain (tx: ${validation_result.txHash})`);
+
           // 4c. Execute via Kraken CLI
           const volumeBase = (decision.amount / market.price).toFixed(8);
           const result = await kraken.placeOrder({
