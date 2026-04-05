@@ -7,6 +7,7 @@
     "deploy": "npx hardhat run scripts/deploy.ts --network sepolia",
     "register": "npx ts-node scripts/register-agent.ts",
     "run-agent": "npx ts-node scripts/run-agent.ts",
+    "claim": "npx ts-node scripts/claim-allocation.ts",
     "dashboard": "npx ts-node scripts/dashboard.ts",
     "test": "npx hardhat test"
   },
