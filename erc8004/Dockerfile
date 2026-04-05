@@ -6,6 +6,8 @@ RUN cargo install --git https://github.com/krakenfx/kraken-cli.git --locked
 # ---- Stage 2: Node.js agent loop ----
 FROM node:20-slim
 
+RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+
 COPY --from=kraken-build /usr/local/cargo/bin/kraken /usr/local/bin/kraken
 
 WORKDIR /app
