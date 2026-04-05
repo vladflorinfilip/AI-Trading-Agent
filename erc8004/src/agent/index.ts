@@ -156,14 +156,19 @@ export async function runAgent(strategy: TradingStrategy) {
 
           // 4c. Execute via Kraken CLI
           const volumeBase = (decision.amount / market.price).toFixed(8);
-          const result = await kraken.placeOrder({
-            pair:      decision.pair,
-            type:      decision.action === "BUY" ? "buy" : "sell",
-            ordertype: "market",
-            volume:    volumeBase,
-          });
-          console.log(`[agent] Order placed: ${result.txid.join(", ")}`);
-          console.log(`[agent] ${result.descr.order}`);
+          try {
+            const result = await kraken.placeOrder({
+              pair:      decision.pair,
+              type:      decision.action === "BUY" ? "buy" : "sell",
+              ordertype: "market",
+              volume:    volumeBase,
+            });
+            console.log(`[agent] Order placed: ${result.txid.join(", ")}`);
+            console.log(`[agent] ${result.descr.order}`);
+          } catch (orderErr) {
+            console.error(`[agent] Order execution failed (intent was approved):`, orderErr);
+            decision.reasoning += ` [ORDER FAILED: ${orderErr instanceof Error ? orderErr.message : orderErr}]`;
+          }
         }
       }
 
