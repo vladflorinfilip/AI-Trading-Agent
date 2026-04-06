@@ -99,7 +99,10 @@ def get_paper_status():
 
 @app.get("/api/paper/history")
 def get_paper_history():
-    return _kraken_call(kraken.paper_history)
+    data = _kraken_call(kraken.paper_history)
+    if isinstance(data, dict):
+        return data.get("trades", data.get("history", data.get("orders", [])))
+    return data if isinstance(data, list) else []
 
 
 # -- Agent ---------------------------------------------------------------------
