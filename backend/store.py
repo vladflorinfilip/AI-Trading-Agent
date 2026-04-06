@@ -15,7 +15,10 @@ log = logging.getLogger(__name__)
 
 _RUNS_KEY = "pipeline_runs"
 _RUN_PREFIX = "pipeline_run:"
+_PNL_KEY = "pnl_snapshots"
+_ONCHAIN_KEY = "onchain_metrics"
 _TTL_SECONDS = 14 * 24 * 3600  # 14 days
+_PNL_MAX_ENTRIES = 2000
 
 
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
@@ -67,6 +70,40 @@ class RunStore:
         results = pipe.execute()
         return [json.loads(r) for r in results if r]
 
+    # -- PnL snapshots ------------------------------------------------------------
+
+    def save_pnl_snapshot(self, value: float):
+        if not self.r:
+            return
+        ts = datetime.now(timezone.utc).timestamp()
+        entry = json.dumps({"ts": round(ts), "value": round(value, 2)})
+        pipe = self.r.pipeline()
+        pipe.zadd(_PNL_KEY, {entry: ts})
+        pipe.zremrangebyrank(_PNL_KEY, 0, -(_PNL_MAX_ENTRIES + 1))
+        pipe.execute()
+
+    def get_pnl_snapshots(self, limit: int = 500) -> list[dict[str, Any]]:
+        if not self.r:
+            return []
+        entries = self.r.zrange(_PNL_KEY, 0, -1)
+        snapshots = [json.loads(e) for e in entries]
+        return snapshots[-limit:]
+
+    # -- On-chain metrics ----------------------------------------------------------
+
+    def save_onchain_metrics(self, data: dict[str, Any]):
+        if not self.r:
+            return
+        self.r.set(_ONCHAIN_KEY, json.dumps(data, default=str))
+
+    def get_onchain_metrics(self) -> dict[str, Any] | None:
+        if not self.r:
+            return None
+        raw = self.r.get(_ONCHAIN_KEY)
+        return json.loads(raw) if raw else None
+
+    # -- Housekeeping -------------------------------------------------------------
+
     def clear(self):
         if not self.r:
             return
@@ -74,3 +111,4 @@ class RunStore:
         if run_ids:
             self.r.delete(*[f"{_RUN_PREFIX}{rid}" for rid in run_ids])
         self.r.delete(_RUNS_KEY)
+        self.r.delete(_PNL_KEY)

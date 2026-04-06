@@ -208,4 +208,9 @@ export class RiskRouterClient {
   async getCurrentNonce(agentId: bigint): Promise<bigint> {
     return this.contract.getIntentNonce(agentId);
   }
+
+  async getTradeRecord(agentId: bigint): Promise<{ count: number; windowStart: number }> {
+    const r = await this.contract.getTradeRecord(agentId);
+    return { count: Number(r.count ?? r[0]), windowStart: Number(r.windowStart ?? r[1]) };
+  }
 }

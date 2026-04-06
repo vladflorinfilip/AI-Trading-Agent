@@ -30,6 +30,7 @@ import { KrakenClient } from "../exchange/kraken";
 import { VaultClient } from "../onchain/vault";
 import { RiskRouterClient } from "../onchain/riskRouter";
 import { ValidationRegistryClient } from "../onchain/validationRegistry";
+import { ReputationRegistryClient } from "../onchain/reputationRegistry";
 import { formatExplanation, formatCheckpointLog } from "../explainability/reasoner";
 import { generateCheckpoint } from "../explainability/checkpoint";
 
@@ -41,7 +42,8 @@ const SEPOLIA_CHAIN_ID = 11155111;
 const TRADING_PAIR    = process.env.TRADING_PAIR || "XBTUSD";
 const POLL_INTERVAL   = parseInt(process.env.POLL_INTERVAL_MS || "30000");
 const CHECKPOINTS_FILE = path.join(process.cwd(), "checkpoints.jsonl");
-const HOLD_INTENT_HASH = ethers.ZeroHash; // used for HOLD decisions (no intent submitted)
+const HOLD_INTENT_HASH = ethers.ZeroHash;
+const PYTHON_API_URL   = process.env.PYTHON_API_URL || "http://localhost:8000";
 
 function requireEnv(key: string): string {
   const val = process.env[key];
@@ -58,8 +60,9 @@ export async function runAgent(strategy: TradingStrategy) {
   const privateKey       = requireEnv("PRIVATE_KEY");
   const registryAddress  = requireEnv("AGENT_REGISTRY_ADDRESS");
   const vaultAddress     = requireEnv("HACKATHON_VAULT_ADDRESS");
-  const routerAddress    = requireEnv("RISK_ROUTER_ADDRESS");
+  const routerAddress     = requireEnv("RISK_ROUTER_ADDRESS");
   const validationAddress = requireEnv("VALIDATION_REGISTRY_ADDRESS");
+  const reputationAddress = process.env.REPUTATION_REGISTRY_ADDRESS || "";
 
   const provider = new ethers.JsonRpcProvider(rpcUrl);
 
@@ -93,8 +96,11 @@ export async function runAgent(strategy: TradingStrategy) {
   // Init clients
   const kraken     = new KrakenClient();
   const vault      = new VaultClient(vaultAddress, provider);
-  const riskRouter = new RiskRouterClient(routerAddress, agentWallet, SEPOLIA_CHAIN_ID);
-  const validation = new ValidationRegistryClient(validationAddress, agentWallet);
+  const riskRouter  = new RiskRouterClient(routerAddress, agentWallet, SEPOLIA_CHAIN_ID);
+  const validation  = new ValidationRegistryClient(validationAddress, agentWallet);
+  const reputation  = reputationAddress
+    ? new ReputationRegistryClient(reputationAddress, provider)
+    : null;
 
   console.log(`\n[agent] Starting agent loop`);
   console.log(`[agent] agentId:  ${agentId}`);
@@ -173,24 +179,29 @@ export async function runAgent(strategy: TradingStrategy) {
 
       console.log(formatCheckpointLog(checkpoint));
 
-      // 6. Post checkpoint hash to ValidationRegistry
+      // 6. Post checkpoint hash to ValidationRegistry (skip HOLD — only score actionable trades)
       const cp = checkpoint as typeof checkpoint & { checkpointHash?: string };
-      if (cp.checkpointHash) {
+      if (cp.checkpointHash && decision.action !== "HOLD") {
         try {
           await validation.postCheckpointAttestation(
             agentId,
             cp.checkpointHash,
-            Math.round(decision.confidence * 100), // self-assessed score
+            Math.round(decision.confidence * 100),
             `${decision.action} ${decision.pair} @ $${market.price}`
           );
           console.log(`[agent] Checkpoint posted to ValidationRegistry: ${cp.checkpointHash.slice(0, 20)}...`);
         } catch (e) {
           console.warn(`[agent] ValidationRegistry post failed (non-fatal):`, e);
         }
+      } else if (decision.action === "HOLD") {
+        console.log(`[agent] HOLD — skipping ValidationRegistry (local checkpoint only)`);
       }
 
       // 7. Persist to checkpoints.jsonl
       fs.appendFileSync(CHECKPOINTS_FILE, JSON.stringify(checkpoint) + "\n");
+
+      // 8. Publish on-chain metrics to the Python backend for the dashboard
+      await publishOnchainMetrics(agentId, validation, reputation, riskRouter);
 
     } catch (err) {
       console.error(`[agent] Error in tick:`, err);
@@ -199,6 +210,53 @@ export async function runAgent(strategy: TradingStrategy) {
 
   await tick();
   setInterval(tick, POLL_INTERVAL);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// On-chain metrics publisher — POSTs current scores to the Python backend
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function publishOnchainMetrics(
+  agentId: bigint,
+  validation: ValidationRegistryClient,
+  reputation: ReputationRegistryClient | null,
+  riskRouter: RiskRouterClient,
+) {
+  try {
+    const [attestations, validationScore, tradeRecord, riskParams] = await Promise.all([
+      validation.getAttestationCount(agentId),
+      validation.getAverageScore(agentId),
+      riskRouter.getTradeRecord(agentId),
+      riskRouter.getRiskParams(agentId),
+    ]);
+
+    let reputationScore = 0;
+    if (reputation) {
+      try { reputationScore = await reputation.getAverageScore(agentId); } catch { /* no feedback yet */ }
+    }
+
+    const metrics = {
+      agentId: Number(agentId),
+      attestationCount: attestations,
+      validationScore,
+      reputationScore,
+      tradesThisHour: tradeRecord.count,
+      tradeWindowStart: tradeRecord.windowStart,
+      maxTradesPerHour: riskParams.maxTradesPerHour,
+      maxPositionUsd: riskParams.maxPositionUsd,
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+
+    await fetch(`${PYTHON_API_URL}/api/metrics/onchain`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(metrics),
+    });
+
+    console.log(`[agent] On-chain metrics published: ${attestations} attestations, validation=${validationScore}, reputation=${reputationScore}, trades=${tradeRecord.count}/${riskParams.maxTradesPerHour}`);
+  } catch (err) {
+    console.warn(`[agent] Failed to publish on-chain metrics (non-fatal):`, err);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

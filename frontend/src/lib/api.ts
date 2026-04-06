@@ -32,5 +32,8 @@ export const api = {
 	runAgent: (message: string) => post<any>('/api/agent/run', { message }),
 	runPipeline: (query: string) => post<any>('/api/pipeline/run', { query }),
 	getHistory: (limit: number = 20) => get<any>(`/api/history?limit=${limit}`),
-	getHistoryRun: (id: string) => get<any>(`/api/history/${id}`)
+	getHistoryRun: (id: string) => get<any>(`/api/history/${id}`),
+	portfolio: () => get<any>('/api/metrics/portfolio'),
+	performance: () => get<any>('/api/metrics/performance'),
+	onchain: () => get<any>('/api/metrics/onchain'),
 };

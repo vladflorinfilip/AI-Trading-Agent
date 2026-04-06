@@ -110,4 +110,11 @@ export class ValidationRegistryClient {
   async getAverageScore(agentId: bigint): Promise<number> {
     return Number(await this.contract.getAverageValidationScore(agentId));
   }
+
+  /**
+   * Get the total number of attestations posted for an agent.
+   */
+  async getAttestationCount(agentId: bigint): Promise<number> {
+    return Number(await this.contract.attestationCount(agentId));
+  }
 }
