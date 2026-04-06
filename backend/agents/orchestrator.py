@@ -88,6 +88,8 @@ def _extract_price(ticker: dict) -> float | None:
             c = pair_data["c"]
             return float(c[0]) if isinstance(c, list) else float(c)
     return None
+
+
 def _parse_risk_decision(risk_response: str) -> tuple[str, float | None]:
     """Parse RISK-APPROVE / RISK-RESIZE <amt> / RISK-VETO from the risk manager."""
     upper = risk_response.upper()
