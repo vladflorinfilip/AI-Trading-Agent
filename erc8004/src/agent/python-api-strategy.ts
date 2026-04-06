@@ -50,11 +50,19 @@ export class PythonApiStrategy implements TradingStrategy {
       const reasoning =
         traderStage?.response ?? json.decision ?? "No reasoning returned";
 
+      const pipelineAmount = json.amount_usd;
+      const atrSized = json.atr
+        ? this.atrPositionSize(json.atr, data.price)
+        : null;
+      const tradeAmount = action === "HOLD" ? 0
+        : (pipelineAmount && pipelineAmount > 0) ? pipelineAmount
+        : atrSized ?? this.tradeAmountUsd;
+
       return {
         action,
         asset: data.pair.replace("USD", ""),
         pair: data.pair,
-        amount: action === "HOLD" ? 0 : this.tradeAmountUsd,
+        amount: tradeAmount,
         confidence: this.inferConfidence(action, reasoning),
         reasoning,
       };
@@ -82,6 +90,15 @@ export class PythonApiStrategy implements TradingStrategy {
     return hasStrong ? 0.85 : 0.75;
   }
 
+  private atrPositionSize(atr: number, price: number): number {
+    const portfolioEstimate = this.tradeAmountUsd * 10;
+    const riskPerTrade = portfolioEstimate * 0.02;
+    const atrPct = atr / price;
+    if (atrPct <= 0) return this.tradeAmountUsd;
+    const sized = Math.min(riskPerTrade / atrPct, portfolioEstimate * 0.15);
+    return Math.max(10, Math.round(sized * 100) / 100);
+  }
+
   private fallbackHold(data: MarketData, reason: string): TradeDecision {
     return {
       action: "HOLD",
@@ -96,6 +113,8 @@ export class PythonApiStrategy implements TradingStrategy {
 
 interface PipelineResponse {
   decision: string;
+  amount_usd?: number;
+  atr?: number;
   stages: Array<{
     agent: string;
     response: string;

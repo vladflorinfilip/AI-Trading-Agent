@@ -33,6 +33,7 @@ import { ValidationRegistryClient } from "../onchain/validationRegistry";
 import { ReputationRegistryClient } from "../onchain/reputationRegistry";
 import { formatExplanation, formatCheckpointLog } from "../explainability/reasoner";
 import { generateCheckpoint } from "../explainability/checkpoint";
+import { recordBuy, recordSell, formatPnLNotes } from "./position-tracker";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -167,6 +168,19 @@ export async function runAgent(strategy: TradingStrategy) {
             });
             console.log(`[agent] Order placed: ${result.txid.join(", ")}`);
             console.log(`[agent] ${result.descr.order}`);
+
+            // 4d. Track position for PnL journaling
+            const vol = parseFloat(volumeBase);
+            if (decision.action === "BUY") {
+              recordBuy(decision.pair, market.price, vol, decision.amount);
+            } else if (decision.action === "SELL") {
+              const pnl = recordSell(decision.pair, market.price, vol);
+              if (pnl) {
+                const pnlNote = formatPnLNotes(pnl);
+                console.log(`[agent] ${pnlNote}`);
+                decision.reasoning += ` [${pnlNote}]`;
+              }
+            }
           } catch (orderErr) {
             console.error(`[agent] Order execution failed (intent was approved):`, orderErr);
             decision.reasoning += ` [ORDER FAILED: ${orderErr instanceof Error ? orderErr.message : orderErr}]`;
