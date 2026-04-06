@@ -49,6 +49,25 @@ export class KrakenClient {
     }
   }
 
+  /**
+   * Initialize the paper trading account if running in sandbox mode.
+   * Must be called once before placing any paper orders.
+   */
+  async initPaperAccount(): Promise<void> {
+    if (!this.sandbox) return;
+    try {
+      await this.run(["paper", "init"]);
+      console.log("[kraken] Paper trading account initialized");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("already initialized")) {
+        console.log("[kraken] Paper trading account already initialized");
+      } else {
+        console.warn("[kraken] Paper account init failed:", msg);
+      }
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Core CLI runner
   // ─────────────────────────────────────────────────────────────────────────

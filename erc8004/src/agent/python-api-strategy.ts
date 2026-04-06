@@ -77,9 +77,9 @@ export class PythonApiStrategy implements TradingStrategy {
     action: TradeDecision["action"],
     reasoning: string
   ): number {
-    if (action === "HOLD") return 0.5;
-    const hasStrong = /strong|clear|significant|confident/i.test(reasoning);
-    return hasStrong ? 0.8 : 0.65;
+    const hasStrong = /strong|clear|significant|confident|breakout|momentum/i.test(reasoning);
+    if (action === "HOLD") return hasStrong ? 0.80 : 0.70;
+    return hasStrong ? 0.85 : 0.75;
   }
 
   private fallbackHold(data: MarketData, reason: string): TradeDecision {

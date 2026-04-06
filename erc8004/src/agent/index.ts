@@ -102,6 +102,8 @@ export async function runAgent(strategy: TradingStrategy) {
     ? new ReputationRegistryClient(reputationAddress, provider)
     : null;
 
+  await kraken.initPaperAccount();
+
   console.log(`\n[agent] Starting agent loop`);
   console.log(`[agent] agentId:  ${agentId}`);
   console.log(`[agent] Pair:     ${TRADING_PAIR}`);
