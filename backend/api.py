@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -149,3 +150,143 @@ def get_history_run(run_id: str):
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     return run
+
+
+# -- Metrics -------------------------------------------------------------------
+
+@app.get("/api/metrics/portfolio")
+def get_portfolio_metrics():
+    """Live portfolio summary: value, PnL, trade stats, and time series."""
+    starting_balance = cfg.kraken.paper_starting_balance
+
+    try:
+        raw = kraken.paper_balance()
+        balances = raw.get("balances", raw)
+    except KrakenCLIError:
+        balances = {}
+
+    btc_price = 0.0
+    try:
+        td = kraken.ticker("BTC/USD")
+        for v in td.values():
+            btc_price = float(v.get("c", [0])[0])
+            break
+    except KrakenCLIError:
+        pass
+
+    usd = float((balances.get("USD") or {}).get("total", 0))
+    btc = float(
+        (balances.get("XBT") or balances.get("BTC") or {}).get("total", 0)
+    )
+    eth = float((balances.get("ETH") or {}).get("total", 0))
+
+    eth_price = 0.0
+    try:
+        td = kraken.ticker("ETH/USD")
+        for v in td.values():
+            eth_price = float(v.get("c", [0])[0])
+            break
+    except KrakenCLIError:
+        pass
+
+    total = usd + btc * btc_price + eth * eth_price
+    pnl = total - starting_balance
+    pnl_pct = (pnl / starting_balance * 100) if starting_balance else 0
+
+    try:
+        trades = kraken.paper_history()
+        if isinstance(trades, dict):
+            trades = trades.get("trades", trades.get("history", []))
+        if not isinstance(trades, list):
+            trades = []
+    except KrakenCLIError:
+        trades = []
+
+    buys = sum(
+        1 for t in trades
+        if str(t.get("side", t.get("type", ""))).lower() == "buy"
+    )
+    sells = len(trades) - buys
+
+    store.save_pnl_snapshot(total)
+    pnl_series = store.get_pnl_snapshots()
+    if not pnl_series:
+        now = datetime.now(timezone.utc).timestamp()
+        pnl_series = [{"ts": round(now), "value": round(total, 2)}]
+
+    return {
+        "starting_balance": starting_balance,
+        "total_value": round(total, 2),
+        "usd_balance": round(usd, 2),
+        "btc_balance": btc,
+        "btc_price": round(btc_price, 2),
+        "eth_balance": eth,
+        "eth_price": round(eth_price, 2),
+        "pnl": round(pnl, 2),
+        "pnl_pct": round(pnl_pct, 2),
+        "trade_count": len(trades),
+        "buy_count": buys,
+        "sell_count": sells,
+        "pnl_series": pnl_series,
+    }
+
+
+@app.get("/api/metrics/performance")
+def get_performance_metrics():
+    """Decision distribution + pipeline stats from run history."""
+    runs = store.list_runs(limit=200)
+    total = len(runs)
+    if total == 0:
+        return {
+            "total_runs": 0,
+            "decisions": {"BUY": 0, "SELL": 0, "HOLD": 0},
+            "avg_duration_ms": 0,
+            "error_count": 0,
+            "last_run": None,
+        }
+
+    decisions: dict[str, int] = {"BUY": 0, "SELL": 0, "HOLD": 0}
+    total_duration = 0
+    error_count = 0
+    for r in runs:
+        d = (r.get("decision") or "HOLD").upper()
+        decisions[d] = decisions.get(d, 0) + 1
+        total_duration += r.get("total_duration_ms", 0)
+        if r.get("error"):
+            error_count += 1
+
+    return {
+        "total_runs": total,
+        "decisions": decisions,
+        "avg_duration_ms": round(total_duration / total) if total else 0,
+        "error_count": error_count,
+        "last_run": runs[0].get("timestamp") if runs else None,
+    }
+
+
+# -- On-chain metrics (pushed by the TS agent) ---------------------------------
+
+@app.post("/api/metrics/onchain")
+def post_onchain_metrics(data: dict):
+    """Receive on-chain metrics from the erc8004 TS agent."""
+    store.save_onchain_metrics(data)
+    return {"ok": True}
+
+
+@app.get("/api/metrics/onchain")
+def get_onchain_metrics():
+    """Return the latest on-chain metrics cached by the TS agent."""
+    metrics = store.get_onchain_metrics()
+    if not metrics:
+        return {
+            "agentId": 0,
+            "attestationCount": 0,
+            "validationScore": 0,
+            "reputationScore": 0,
+            "tradesThisHour": 0,
+            "tradeWindowStart": 0,
+            "maxTradesPerHour": 10,
+            "maxPositionUsd": 500,
+            "timestamp": 0,
+        }
+    return metrics

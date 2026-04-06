@@ -69,6 +69,7 @@ declare module '$env/static/private' {
 	export const MINIO_REGION: string;
 	export const __CF_USER_TEXT_ENCODING: string;
 	export const npm_execpath: string;
+	export const VIRTUAL_ENV: string;
 	export const AWS_PROFILE: string;
 	export const PAGER: string;
 	export const PYDEVD_DISABLE_FILE_VALIDATION: string;
@@ -117,6 +118,7 @@ declare module '$env/static/private' {
 	export const GIT_ASKPASS: string;
 	export const INFOPATH: string;
 	export const HOMEBREW_CELLAR: string;
+	export const VIRTUAL_ENV_PROMPT: string;
 	export const npm_node_execpath: string;
 	export const npm_config_prefix: string;
 	export const COLORTERM: string;
@@ -238,6 +240,7 @@ declare module '$env/dynamic/private' {
 		MINIO_REGION: string;
 		__CF_USER_TEXT_ENCODING: string;
 		npm_execpath: string;
+		VIRTUAL_ENV: string;
 		AWS_PROFILE: string;
 		PAGER: string;
 		PYDEVD_DISABLE_FILE_VALIDATION: string;
@@ -286,6 +289,7 @@ declare module '$env/dynamic/private' {
 		GIT_ASKPASS: string;
 		INFOPATH: string;
 		HOMEBREW_CELLAR: string;
+		VIRTUAL_ENV_PROMPT: string;
 		npm_node_execpath: string;
 		npm_config_prefix: string;
 		COLORTERM: string;
