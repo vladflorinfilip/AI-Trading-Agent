@@ -185,9 +185,9 @@ export async function runAgent(strategy: TradingStrategy) {
 
       console.log(formatCheckpointLog(checkpoint));
 
-      // 6. Post checkpoint hash to ValidationRegistry (skip HOLD — only score actionable trades)
+      // 6. Post checkpoint hash to ValidationRegistry
       const cp = checkpoint as typeof checkpoint & { checkpointHash?: string };
-      if (cp.checkpointHash && decision.action !== "HOLD") {
+      if (cp.checkpointHash) {
         try {
           await validation.postCheckpointAttestation(
             agentId,
@@ -199,8 +199,6 @@ export async function runAgent(strategy: TradingStrategy) {
         } catch (e) {
           console.warn(`[agent] ValidationRegistry post failed (non-fatal):`, e);
         }
-      } else if (decision.action === "HOLD") {
-        console.log(`[agent] HOLD — skipping ValidationRegistry (local checkpoint only)`);
       }
 
       // 7. Persist to checkpoints.jsonl
