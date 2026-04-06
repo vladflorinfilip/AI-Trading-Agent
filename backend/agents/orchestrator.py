@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 from ..config import AgentConfig
+from ..kraken_client import KrakenClient
 from ..store import RunStore
 from .market_analyst import MarketAnalyst
 from .trader import Trader
@@ -13,6 +15,52 @@ from .risk_manager import RiskManager
 log = logging.getLogger(__name__)
 
 _TRADE_TOOL_NAMES = frozenset({"paper_buy", "paper_sell", "buy", "sell"})
+MAX_RECENT_TRADES = 10
+
+
+def _format_trade_summary(trades: list[dict], balance: dict | None) -> str:
+    """Build a concise text block of recent trades + current balance for prompt injection."""
+    lines: list[str] = []
+
+    if balance:
+        parts = []
+        for asset, amt in sorted(balance.items()):
+            try:
+                val = float(amt) if not isinstance(amt, (int, float)) else amt
+            except (ValueError, TypeError):
+                continue
+            if val > 0:
+                parts.append(f"{asset}: {val:,.6f}" if val < 1 else f"{asset}: {val:,.2f}")
+        if parts:
+            lines.append(f"Current balance: {', '.join(parts)}")
+
+    if not trades:
+        lines.append("Recent trades: none yet.")
+        return "\n".join(lines)
+
+    lines.append(f"Recent trades (last {len(trades)}):")
+    for t in trades:
+        side = (t.get("type") or t.get("side") or "?").upper()
+        pair = t.get("pair", "?")
+        vol = t.get("vol") or t.get("volume") or "?"
+        price = t.get("price", "?")
+        cost = t.get("cost", "?")
+        ts = t.get("time")
+        age = ""
+        if ts:
+            try:
+                delta = time.time() - float(ts)
+                if delta < 3600:
+                    age = f" ({int(delta / 60)}m ago)"
+                elif delta < 86400:
+                    age = f" ({delta / 3600:.1f}h ago)"
+                else:
+                    age = f" ({delta / 86400:.1f}d ago)"
+            except (ValueError, TypeError):
+                pass
+        lines.append(f"  {side} {pair} vol={vol} @ ${price} cost=${cost}{age}")
+
+    return "\n".join(lines)
 
 
 def _extract_decision(trader_response: str) -> str:
@@ -56,24 +104,54 @@ class Orchestrator:
 
     def __init__(self, cfg: AgentConfig, store: RunStore | None = None):
         self.cfg = cfg
+        self.kraken = KrakenClient(cfg.kraken)
         self.analyst = MarketAnalyst(cfg)
         self.trader = Trader(cfg)
         self.risk_mgr = RiskManager(cfg)
         self.store = store
 
+    def _fetch_portfolio_context(self) -> str:
+        """Pre-fetch balance + recent trades, filter to last N, return formatted text."""
+        balance = None
+        trades: list[dict] = []
+        try:
+            balance = self.kraken.paper_balance()
+        except Exception as e:
+            log.warning("[Orchestrator] failed to pre-fetch balance: %s", e)
+        try:
+            raw = self.kraken.paper_history()
+            if isinstance(raw, dict):
+                trades = raw.get("trades", raw.get("history", raw.get("orders", [])))
+            elif isinstance(raw, list):
+                trades = raw
+            if isinstance(trades, dict):
+                trades = list(trades.values())
+            trades = [t for t in trades if isinstance(t, dict)]
+            trades.sort(key=lambda t: float(t.get("time", 0)), reverse=True)
+            trades = trades[:MAX_RECENT_TRADES]
+        except Exception as e:
+            log.warning("[Orchestrator] failed to pre-fetch history: %s", e)
+
+        return _format_trade_summary(trades, balance)
+
     def run_pipeline(self, query: str) -> dict[str, Any]:
         """Full pipeline with traced output for each stage."""
         pairs = ", ".join(self.cfg.trading_pairs)
+
+        # Pre-fetch portfolio context (balance + last N trades) once
+        portfolio_ctx = self._fetch_portfolio_context()
+        log.info("[Orchestrator] Portfolio context:\n%s", portfolio_ctx)
 
         # Stage 1: Market analysis with computed technical indicators
         analysis = self.analyst.run_traced(
             f"Analyse {pairs}. Call technical_signals for each pair, then provide your verdict."
         )
 
-        # Stage 2: Trader proposes a trade based on analysis
+        # Stage 2: Trader proposes a trade based on analysis + portfolio context
         trade = self.trader.run_traced(
-            f"Based on this market analysis, decide whether to trade:\n\n"
-            f"{analysis['response']}"
+            f"## Your Current Portfolio\n{portfolio_ctx}\n\n"
+            f"## Market Analysis\n{analysis['response']}\n\n"
+            f"Based on this portfolio state and market analysis, decide whether to trade."
         )
 
         raw_decision = _extract_decision(trade["response"])
@@ -93,8 +171,9 @@ class Orchestrator:
         if decision in ("BUY", "SELL"):
             amt_str = f"${amount_usd:.2f}" if amount_usd else "unspecified amount"
             risk = self.risk_mgr.run_traced(
-                f"The trader proposes to {decision} {amt_str} of {pairs}.\n"
-                f"Market context:\n{analysis['response'][:500]}\n\n"
+                f"## Proposed Trade\n{decision} {amt_str} of {pairs}.\n\n"
+                f"## Portfolio State\n{portfolio_ctx}\n\n"
+                f"## Market Context\n{analysis['response'][:500]}\n\n"
                 f"Review this trade. Respond with RISK-APPROVE, RISK-RESIZE <amount>, or RISK-VETO."
             )
             risk_verdict, resize_amt = _parse_risk_decision(risk["response"])
@@ -108,8 +187,9 @@ class Orchestrator:
                 trade["response"] += f"\n\n[RISK MANAGER RESIZED to ${resize_amt:.2f}]: {risk['response']}"
         else:
             risk = self.risk_mgr.run_traced(
-                "No trade proposed. Check current portfolio risk. "
-                "Report concentration and any concerns briefly."
+                f"## Portfolio State\n{portfolio_ctx}\n\n"
+                f"No trade proposed. Check current portfolio risk. "
+                f"Report concentration and any concerns briefly."
             )
 
         stages = [analysis, trade, risk]
