@@ -115,7 +115,9 @@ class TradingAgent(ABC):
         )
 
     def dispatch_tool(self, name: str, args: dict[str, Any]) -> Any:
-        """Route a Gemini function call to the matching KrakenClient method."""
+        """Route a Gemini function call to the matching KrakenClient method or local analysis."""
+        if name == "technical_signals":
+            return self._compute_technical_signals(args)
         method = getattr(self.kraken, name, None)
         if method is None:
             log.warning("[%s] unknown tool: %s", self.name, name)
@@ -124,6 +126,27 @@ class TradingAgent(ABC):
             return method(**args)
         except Exception as e:
             log.error("[%s] %s failed: %s", self.name, name, e)
+            return {"error": str(e)}
+
+    def _compute_technical_signals(self, args: dict[str, Any]) -> Any:
+        """Fetch OHLC + ticker + orderbook, compute indicators locally, return formatted signals."""
+        from ..analysis.indicators import compute_signals, format_signals_for_llm
+        pair = args.get("pair", "BTC/USD")
+        interval = args.get("interval", 60)
+        try:
+            candles_raw = self.kraken.ohlc(pair, interval)
+            candles = candles_raw if isinstance(candles_raw, list) else candles_raw.get("candles", candles_raw.get("result", []))
+            if isinstance(candles, dict):
+                candles = next(iter(candles.values()), [])
+            ticker = self.kraken.ticker(pair)
+            try:
+                orderbook = self.kraken.orderbook(pair, count=10)
+            except Exception:
+                orderbook = None
+            signals = compute_signals(pair, candles, ticker, orderbook)
+            return {"formatted": format_signals_for_llm(signals), "atr_14": signals.atr_14, "rsi_14": signals.rsi_14, "trend": signals.trend}
+        except Exception as e:
+            log.error("[%s] technical_signals failed: %s", self.name, e)
             return {"error": str(e)}
 
     def _call_gemini(self, contents: list[types.Content]):

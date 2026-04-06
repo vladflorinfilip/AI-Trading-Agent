@@ -35,4 +35,13 @@ PAPER_TRADE_TOOLS: list[types.FunctionDeclaration] = [
         description="Show open paper-trading positions.",
         parameters=types.Schema(type="OBJECT", properties={}),
     ),
+    types.FunctionDeclaration(
+        name="paper_history",
+        description=(
+            "Show past paper-trading order history. Use this to review your "
+            "recent trades, check entry prices, and decide whether to take "
+            "profit or cut losses on existing positions."
+        ),
+        parameters=types.Schema(type="OBJECT", properties={}),
+    ),
 ]

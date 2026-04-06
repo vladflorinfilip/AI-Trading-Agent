@@ -49,6 +49,25 @@ export class KrakenClient {
     }
   }
 
+  /**
+   * Initialize the paper trading account if running in sandbox mode.
+   * Must be called once before placing any paper orders.
+   */
+  async initPaperAccount(): Promise<void> {
+    if (!this.sandbox) return;
+    try {
+      await this.run(["paper", "init"]);
+      console.log("[kraken] Paper trading account initialized");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("already initialized")) {
+        console.log("[kraken] Paper trading account already initialized");
+      } else {
+        console.warn("[kraken] Paper account init failed:", msg);
+      }
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Core CLI runner
   // ─────────────────────────────────────────────────────────────────────────
@@ -75,14 +94,18 @@ export class KrakenClient {
       const { stdout } = await execFileAsync(KRAKEN_BIN, args, { timeout: 15000 });
       return JSON.parse(stdout.trim());
     } catch (err: unknown) {
-      // If CLI binary not found, surface a helpful error
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         throw new Error(
           `[kraken] Kraken CLI binary not found at "${KRAKEN_BIN}".\n` +
           `Install it from https://github.com/kraken-oss/kraken-cli or set KRAKEN_CLI_PATH`
         );
       }
-      throw err;
+      const execErr = err as { stderr?: string; stdout?: string; code?: number; cmd?: string };
+      const detail = execErr.stderr?.trim() || execErr.stdout?.trim() || "unknown error";
+      throw new Error(
+        `[kraken] CLI command failed (exit ${execErr.code}): ${detail}\n` +
+        `  cmd: ${KRAKEN_BIN} ${args.join(" ")}`
+      );
     }
   }
 
@@ -141,15 +164,23 @@ export class KrakenClient {
       if (order.price) args.push("--price", order.price);
     }
 
-    const result = await this.run(args, !this.sandbox) as KrakenOrderResponse;
+    const raw = await this.run(args, !this.sandbox) as KrakenOrderResponse & KrakenPaperResponse;
 
-    if (result.error?.length) {
-      throw new Error(`[kraken] Order error: ${result.error.join(", ")}`);
+    if (raw.error?.length) {
+      throw new Error(`[kraken] Order error: ${raw.error.join(", ")}`);
+    }
+
+    // Paper trading returns a flat object; live trading wraps in result.txid/descr
+    if (raw.order_id) {
+      return {
+        txid:  [raw.order_id],
+        descr: { order: `${raw.side} ${raw.volume} ${raw.pair} @ ${raw.price} (paper, cost=${raw.cost}, fee=${raw.fee})` },
+      };
     }
 
     return {
-      txid: result.result?.txid ?? [`${this.sandbox ? "SANDBOX" : "ORDER"}-${Date.now()}`],
-      descr: result.result?.descr ?? { order: `${order.type} ${order.volume} ${order.pair}` },
+      txid: raw.result?.txid ?? [`ORDER-${Date.now()}`],
+      descr: raw.result?.descr ?? { order: `${order.type} ${order.volume} ${order.pair}` },
     };
   }
 
@@ -262,4 +293,17 @@ interface KrakenOrderResponse {
     txid: string[];
     descr: { order: string };
   };
+}
+
+interface KrakenPaperResponse {
+  action?: string;
+  order_id?: string;
+  trade_id?: string;
+  pair?: string;
+  side?: string;
+  volume?: number;
+  price?: number;
+  cost?: number;
+  fee?: number;
+  mode?: string;
 }
