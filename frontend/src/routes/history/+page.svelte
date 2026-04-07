@@ -1,42 +1,87 @@
 <script>
 	import { api } from '$lib/api';
 	import { onMount } from 'svelte';
-	import { decisionColor, formatDateTime, stageIcon, formatDate, truncateResult, fmt$, timeAgo } from '$lib/utils';
+	import { decisionColor, formatDateTime, stageIcon, fmt$, timeAgo } from '$lib/utils';
+	import RunModal from '$lib/components/RunModal.svelte';
 
 	let tab = 'pipeline';
 	let pipelineHistory = [];
 	let tradeHistory = [];
 	let error = '';
+	let loading = false;
 
-	let timeFilter = 'all';
+	// Time filter: '1h' | '6h' | '24h' | '7d' | 'custom'
+	let timeFilter = '1h';
+
+	// Custom date range
+	let customFrom = '';
+	let customTo = '';
+
+	// Modal state
+	let selectedRun = null;
+	let modalOpen = false;
+
+	function getTimeRange() {
+		const now = Date.now() / 1000;
+		if (timeFilter === '1h')  return { from_ts: now - 3600 };
+		if (timeFilter === '6h')  return { from_ts: now - 6 * 3600 };
+		if (timeFilter === '24h') return { from_ts: now - 86400 };
+		if (timeFilter === '7d')  return { from_ts: now - 7 * 86400 };
+		if (timeFilter === 'custom') {
+			const range = {};
+			if (customFrom) range.from_ts = new Date(customFrom).getTime() / 1000;
+			if (customTo) {
+				const to = new Date(customTo);
+				to.setHours(23, 59, 59, 999);
+				range.to_ts = to.getTime() / 1000;
+			}
+			return range;
+		}
+		return {};
+	}
 
 	async function refresh() {
+		loading = true;
 		try {
 			error = '';
-			const [ph, th] = await Promise.all([api.getHistory(), api.paperHistory()]);
+			const range = getTimeRange();
+			const [ph, th] = await Promise.all([
+				api.getHistory(range),
+				api.paperHistory()
+			]);
 			pipelineHistory = ph;
 			tradeHistory = Array.isArray(th) ? th : [];
 		} catch (e) {
 			error = e.message;
+		} finally {
+			loading = false;
 		}
 	}
+
 	onMount(refresh);
 
-	function matchesFilter(ts) {
-		if (timeFilter === 'all') return true;
-		const now = Date.now();
-		if (timeFilter === 'today') {
-			const start = new Date();
-			start.setHours(0, 0, 0, 0);
-			return ts >= start.getTime();
-		}
-		if (timeFilter === '24h') return ts >= now - 86_400_000;
-		if (timeFilter === '7d')  return ts >= now - 7 * 86_400_000;
-		return true;
+	$: timeFilter, customFrom, customTo, refresh();
+
+	// Filter trades client-side to match the selected time window
+	$: filteredTrades = (() => {
+		const range = getTimeRange();
+		return tradeHistory.filter(t => {
+			const ts = t.time || 0;
+			if (range.from_ts && ts < range.from_ts) return false;
+			if (range.to_ts && ts > range.to_ts) return false;
+			return true;
+		});
+	})();
+
+	function openRunModal(run) {
+		selectedRun = run;
+		modalOpen = true;
 	}
 
-	$: filteredPipeline = pipelineHistory.filter(r => matchesFilter(new Date(r.timestamp).getTime()));
-	$: filteredTrades   = tradeHistory.filter(t => matchesFilter((t.time || 0) * 1000));
+	function closeModal() {
+		modalOpen = false;
+		selectedRun = null;
+	}
 </script>
 
 <div class="page">
@@ -50,17 +95,35 @@
 			<button class:active={tab === 'pipeline'} on:click={() => tab = 'pipeline'}>Pipeline Runs</button>
 			<button class:active={tab === 'trades'} on:click={() => tab = 'trades'}>Trades</button>
 		</div>
-		<div class="time-filters">
-			{#each [['today','Today'],['24h','24 h'],['7d','7 d'],['all','All']] as [v,l]}
-				<button class:active={timeFilter === v} on:click={() => timeFilter = v}>{l}</button>
-			{/each}
+		<div class="time-controls">
+			<div class="time-filters">
+				{#each [['1h','1 h'],['6h','6 h'],['24h','24 h'],['7d','7 d'],['custom','Range']] as [v,l]}
+					<button class:active={timeFilter === v} on:click={() => timeFilter = v}>{l}</button>
+				{/each}
+			</div>
+			{#if timeFilter === 'custom'}
+				<div class="date-range">
+					<label>
+						From
+						<input type="date" bind:value={customFrom} />
+					</label>
+					<label>
+						To
+						<input type="date" bind:value={customTo} />
+					</label>
+				</div>
+			{/if}
 		</div>
 	</div>
 
+	{#if loading}
+		<p class="loading">Loading...</p>
+	{/if}
+
 	<!-- Pipeline history tab -->
 	{#if tab === 'pipeline'}
-		{#if filteredPipeline.length > 0}
-			<div class="card">
+		{#if pipelineHistory.length > 0}
+			<div class="card scrollable">
 				<table>
 					<thead>
 						<tr>
@@ -71,8 +134,8 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each filteredPipeline as run}
-							<tr>
+						{#each pipelineHistory as run}
+							<tr class="clickable" on:click={() => openRunModal(run)}>
 								<td class="mono">{formatDateTime(run.timestamp)}</td>
 								<td><span class="decision-badge sm" style="background:{decisionColor(run.decision)}">{run.decision}</span></td>
 								<td class="stage-pills">
@@ -86,15 +149,15 @@
 					</tbody>
 				</table>
 			</div>
-		{:else}
-			<p class="empty">No pipeline runs match the current filter.</p>
+		{:else if !loading}
+			<p class="empty">No pipeline runs in this time window.</p>
 		{/if}
 	{/if}
 
 	<!-- Trades tab -->
 	{#if tab === 'trades'}
 		{#if filteredTrades.length > 0}
-			<div class="card">
+			<div class="card scrollable">
 				<table>
 					<thead>
 						<tr>
@@ -109,10 +172,10 @@
 					<tbody>
 						{#each filteredTrades as trade}
 							<tr>
-								<td class="mono">{trade.time ? formatDateTime(trade.time * 1000) : '--'}</td>
-								<td><span class="decision-badge sm" style="background:{decisionColor(trade.type?.toUpperCase())}">{trade.type || '?'}</span></td>
+								<td class="mono">{trade.time ? timeAgo(trade.time) : '--'}</td>
+								<td><span class="decision-badge sm" style="background:{decisionColor((trade.type || trade.side || '').toUpperCase())}">{trade.type || trade.side || '?'}</span></td>
 								<td>{trade.pair || '--'}</td>
-								<td class="mono">{parseFloat(trade.vol || 0).toFixed(6)}</td>
+								<td class="mono">{parseFloat(trade.vol || trade.volume || 0).toFixed(6)}</td>
 								<td class="mono">{fmt$(parseFloat(trade.price || 0))}</td>
 								<td class="mono">{fmt$(parseFloat(trade.cost || 0))}</td>
 							</tr>
@@ -120,11 +183,15 @@
 					</tbody>
 				</table>
 			</div>
-		{:else}
-			<p class="empty">No trades match the current filter.</p>
+		{:else if !loading}
+			<p class="empty">No trades in this time window.</p>
 		{/if}
 	{/if}
 </div>
+
+{#if modalOpen && selectedRun}
+	<RunModal run={selectedRun} on:close={closeModal} />
+{/if}
 
 <style>
 	.page { display: flex; flex-direction: column; gap: 0.85rem; }
@@ -132,15 +199,24 @@
 	.alert { padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.85rem; }
 	.alert-error { background: #fce8e4; border: 1px solid #e8c4bc; color: #8b3020; }
 
+	.loading { color: #8b7a66; font-size: 0.85rem; text-align: center; padding: 2rem 0; }
+
 	.toolbar {
 		display: flex;
 		justify-content: space-between;
-		align-items: center;
+		align-items: flex-start;
 		flex-wrap: wrap;
 		gap: 0.5rem;
 	}
 
 	.tab-bar, .time-filters { display: flex; gap: 0.3rem; }
+
+	.time-controls {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 0.4rem;
+	}
 
 	.tab-bar button, .time-filters button {
 		padding: 0.45rem 1rem;
@@ -171,6 +247,40 @@
 		font-weight: 600;
 	}
 
+	.date-range {
+		display: flex;
+		gap: 0.6rem;
+		align-items: center;
+	}
+	.date-range label {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		font-size: 0.78rem;
+		color: #6b5a48;
+	}
+	.date-range input[type="date"] {
+		padding: 0.3rem 0.5rem;
+		border: 1px solid #e4ddd4;
+		border-radius: 6px;
+		font-size: 0.78rem;
+		color: #3d2e1f;
+		background: #fff;
+	}
+
+	.scrollable {
+		max-height: 70vh;
+		overflow-y: auto;
+	}
+
+	.clickable {
+		cursor: pointer;
+		transition: background 0.12s;
+	}
+	.clickable:hover {
+		background: #f9f6f2;
+	}
+
 	.stage-pills { display: flex; gap: 0.3rem; }
 	.stage-pill {
 		background: #f0ebe4;
@@ -183,6 +293,7 @@
 
 	@media (max-width: 600px) {
 		.toolbar { flex-direction: column; align-items: flex-start; }
+		.time-controls { align-items: flex-start; }
 		table { font-size: 0.75rem; }
 	}
 </style>

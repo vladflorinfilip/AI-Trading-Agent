@@ -31,7 +31,14 @@ export const api = {
 	paperHistory: () => get<any>('/api/paper/history'),
 	runAgent: (message: string) => post<any>('/api/agent/run', { message }),
 	runPipeline: (query: string) => post<any>('/api/pipeline/run', { query }),
-	getHistory: (limit: number = 20) => get<any>(`/api/history?limit=${limit}`),
+	getHistory: (opts?: { limit?: number; from_ts?: number; to_ts?: number }) => {
+		const p = new URLSearchParams();
+		const limit = opts?.limit ?? 200;
+		p.set('limit', String(limit));
+		if (opts?.from_ts != null) p.set('from_ts', String(opts.from_ts));
+		if (opts?.to_ts != null) p.set('to_ts', String(opts.to_ts));
+		return get<any>(`/api/history?${p}`);
+	},
 	getHistoryRun: (id: string) => get<any>(`/api/history/${id}`),
 	portfolio: () => get<any>('/api/metrics/portfolio'),
 	performance: () => get<any>('/api/metrics/performance'),
