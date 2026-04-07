@@ -105,18 +105,12 @@ export async function runAgent(strategy: TradingStrategy) {
 
   await kraken.initPaperAccount();
 
-  // Ensure risk params are initialized on-chain for this agent
+  // Check if risk params exist on-chain (shared hackathon contract — only admin can set them)
   try {
     const params = await riskRouter.getRiskParams(agentId);
     console.log(`[agent] Risk params active: maxPosition=$${params.maxPositionUsd}, maxTrades=${params.maxTradesPerHour}/hr`);
   } catch {
-    console.log(`[agent] No risk params set for agent ${agentId} — initializing on-chain...`);
-    try {
-      const receipt = await riskRouter.setRiskParams(agentId, 1000, 500, 10);
-      console.log(`[agent] Risk params initialized (tx: ${receipt.hash})`);
-    } catch (e) {
-      console.warn(`[agent] Failed to set risk params (non-fatal):`, e);
-    }
+    console.warn(`[agent] No risk params set on-chain for agent ${agentId} — metrics will use defaults`);
   }
 
   console.log(`\n[agent] Starting agent loop`);
@@ -257,19 +251,13 @@ async function publishOnchainMetrics(
   riskRouter: RiskRouterClient,
 ) {
   try {
-    const defaultRiskParams = { maxPositionUsd: 0, maxDrawdownBps: 0, maxTradesPerHour: 10, active: false };
-
-    const [attestations, validationScore, tradeRecord, riskParams] = await Promise.all([
-      validation.getAttestationCount(agentId),
-      validation.getAverageScore(agentId),
-      riskRouter.getTradeRecord(agentId),
-      riskRouter.getRiskParams(agentId).catch(() => defaultRiskParams),
+    const [attestations, validationScore, tradeRecord, riskParams, reputationScore] = await Promise.all([
+      validation.getAttestationCount(agentId).catch(() => 0),
+      validation.getAverageScore(agentId).catch(() => 0),
+      riskRouter.getTradeRecord(agentId).catch(() => ({ count: 0, windowStart: 0 })),
+      riskRouter.getRiskParams(agentId).catch(() => ({ maxPositionUsd: 0, maxDrawdownBps: 0, maxTradesPerHour: 10, active: false })),
+      reputation ? reputation.getAverageScore(agentId).catch(() => 0) : Promise.resolve(0),
     ]);
-
-    let reputationScore = 0;
-    if (reputation) {
-      try { reputationScore = await reputation.getAverageScore(agentId); } catch { /* no feedback yet */ }
-    }
 
     const metrics = {
       agentId: Number(agentId),
