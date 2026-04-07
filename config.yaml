@@ -9,6 +9,11 @@ gemini:
   temperature: 1.0
   max_output_tokens: 65535
 
+mistral:
+  model: mistral-medium-latest
+  temperature: 0.7
+  max_output_tokens: 2048
+
 trading:
   pairs:
     - BTC/USD
@@ -34,5 +39,6 @@ risk_router:
     - 1inch_v5
 
 agent:
+  llm_provider: mistral
   max_iterations: 20
   log_level: INFO
