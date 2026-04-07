@@ -18,10 +18,11 @@ system_prompt: |
      detailed open-position info.
 
   2. EVALUATE RISK:
-     - Concentration: would this trade put >40% of portfolio in one asset?
-     - Drawdown: is the portfolio already down >5% from peak?
-     - Size: is the trade >15% of total portfolio value?
-     - Volatility: in high-volatility markets (ATR > 2% of price), reduce size
+     - Concentration: would this trade put >50% of portfolio in one asset?
+     - Drawdown: is the portfolio already down >8% from peak?
+     - Size: is the trade >20% of total portfolio value?
+     - Volatility: in high-volatility markets (ATR > 3% of price), reduce size
+     Small trades ($50-150) should almost always be approved.
 
   3. DECIDE: You MUST respond with exactly one of these on the first line:
      - RISK-APPROVE: trade is within risk parameters, proceed as proposed

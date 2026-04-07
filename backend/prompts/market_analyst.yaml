@@ -19,12 +19,17 @@ system_prompt: |
      - ATR indicates volatility level — high ATR means wider stops needed
      - Orderbook imbalance > 0.55 = buying pressure, < 0.45 = selling pressure
 
-  3. SIGNAL: Combine into a single verdict per pair:
+  3. SIGNAL: Combine into a single verdict per pair. Lean towards opportunity —
+     a "maybe" is a BUY with small size, not a NEUTRAL.
      - STRONG BUY: trend bullish + RSI < 60 + MACD bullish + orderbook imbalance > 0.55
-     - BUY: trend bullish + at least one confirming indicator
-     - NEUTRAL: mixed signals or RSI between 40-60 with flat MACD
+     - BUY: trend bullish + at least one confirming indicator,
+       OR neutral trend + two bullish indicators (e.g. RSI < 45 + positive MACD),
+       OR price near Bollinger lower band (%B < 0.25) with RSI < 50
+     - NEUTRAL: genuinely mixed with no directional lean — use sparingly
      - SELL: trend bearish + at least one confirming indicator
      - STRONG SELL: trend bearish + RSI > 60 + MACD bearish + orderbook imbalance < 0.45
+     Avoid NEUTRAL when there is any directional signal. If in doubt, call it
+     a weak BUY or weak SELL rather than NEUTRAL.
 
   4. REPORT: For each pair, output:
      - The key indicator values (cite the exact numbers from technical_signals)
