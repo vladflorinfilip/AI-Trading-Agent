@@ -105,6 +105,20 @@ export async function runAgent(strategy: TradingStrategy) {
 
   await kraken.initPaperAccount();
 
+  // Ensure risk params are initialized on-chain for this agent
+  try {
+    const params = await riskRouter.getRiskParams(agentId);
+    console.log(`[agent] Risk params active: maxPosition=$${params.maxPositionUsd}, maxTrades=${params.maxTradesPerHour}/hr`);
+  } catch {
+    console.log(`[agent] No risk params set for agent ${agentId} — initializing on-chain...`);
+    try {
+      const receipt = await riskRouter.setRiskParams(agentId, 1000, 500, 10);
+      console.log(`[agent] Risk params initialized (tx: ${receipt.hash})`);
+    } catch (e) {
+      console.warn(`[agent] Failed to set risk params (non-fatal):`, e);
+    }
+  }
+
   console.log(`\n[agent] Starting agent loop`);
   console.log(`[agent] agentId:  ${agentId}`);
   console.log(`[agent] Pair:     ${TRADING_PAIR}`);
@@ -243,11 +257,13 @@ async function publishOnchainMetrics(
   riskRouter: RiskRouterClient,
 ) {
   try {
+    const defaultRiskParams = { maxPositionUsd: 0, maxDrawdownBps: 0, maxTradesPerHour: 10, active: false };
+
     const [attestations, validationScore, tradeRecord, riskParams] = await Promise.all([
       validation.getAttestationCount(agentId),
       validation.getAverageScore(agentId),
       riskRouter.getTradeRecord(agentId),
-      riskRouter.getRiskParams(agentId),
+      riskRouter.getRiskParams(agentId).catch(() => defaultRiskParams),
     ]);
 
     let reputationScore = 0;

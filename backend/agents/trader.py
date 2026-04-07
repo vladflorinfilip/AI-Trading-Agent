@@ -68,42 +68,49 @@ class Trader(TradingAgent):
         )
 
     def _extract_decision(self, analysis_text: str) -> dict:
-        """Second-pass Gemini call: extract structured decision from the analysis text.
+        """Extract structured decision from analysis text.
 
-        This call has NO tools and uses response_schema for constrained JSON output,
-        making it far more reliable than asking the main agent loop to format JSON.
+        Tries Gemini first (schema-constrained JSON); falls back to Mistral.
         """
         prompt = (
             "The following is a crypto trading analysis report. "
             "Extract the primary trade decision as JSON, following the schema exactly.\n\n"
             f"{analysis_text}"
         )
-        if self.llm_provider == "mistral":
-            response = self._call_mistral(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You extract a single trade decision object. "
-                            "Return valid JSON only, with keys: pair, action, amount_usd, max_slippage_bps, rationale."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-                include_tools=False,
-            )
-            content = response.choices[0].message.content if response.choices else "{}"
-            if isinstance(content, list):
-                content = "".join(getattr(chunk, "text", "") for chunk in content)
-            return json.loads(content or "{}")
 
-        response = self.client.models.generate_content(
-            model=self.cfg.gemini.model,
-            contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
-            config=self._extraction_config,
+        if self._gemini_available:
+            try:
+                response = self.gemini_client.models.generate_content(
+                    model=self.cfg.gemini.model,
+                    contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+                    config=self._extraction_config,
+                )
+                return json.loads(response.text)
+            except Exception as e:
+                log.warning("[Trader] Gemini extraction failed (%s), falling back to Mistral", e)
+
+        return self._extract_decision_mistral(prompt)
+
+    def _extract_decision_mistral(self, prompt: str) -> dict:
+        """Mistral-based structured extraction fallback."""
+        response = self._call_mistral(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You extract a single trade decision object. "
+                        "Return valid JSON only, with keys: pair, action, amount_usd, max_slippage_bps, rationale."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            include_tools=False,
         )
-        return json.loads(response.text)
+        content = response.choices[0].message.content if response.choices else "{}"
+        if isinstance(content, list):
+            content = "".join(getattr(chunk, "text", "") for chunk in content)
+        return json.loads(content or "{}")
 
     def run_trade_intent(self, user_message: str) -> tuple[str, TradeIntent | None]:
         """Run the full agent loop, then extract a typed TradeIntent.

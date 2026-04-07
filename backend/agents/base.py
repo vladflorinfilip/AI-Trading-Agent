@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from abc import ABC, abstractmethod
+from abc import ABC
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +37,11 @@ def _parse_retry_delay(error_msg: str) -> float:
 
 
 class TradingAgent(ABC):
-    """Base class: LLM model with function-calling wired to Kraken CLI."""
+    """Base class: LLM model with function-calling wired to Kraken CLI.
+
+    Uses a Gemini-first strategy: every call tries Gemini (with key rotation
+    and 429 retries).  If Gemini fails entirely, falls back to Mistral.
+    """
 
     def __init__(
         self,
@@ -49,38 +53,44 @@ class TradingAgent(ABC):
         self.kraken = KrakenClient(cfg.kraken)
         self.prompt_data = load_prompt(prompt_name)
         self.name = self.prompt_data.get("role", self.__class__.__name__)
-        self.llm_provider = (cfg.llm_provider or "mistral").strip().lower()
         self.tools = tools
         self._system_prompt = self._build_system_prompt()
         self._api_keys: list[str] = [k for k in [cfg.gemini.api_key, cfg.gemini.fallback_api_key] if k]
         self._active_key_idx = 0
+        self._gemini_available = bool(self._api_keys)
 
-        if self.llm_provider == "gemini":
-            self.client = genai.Client(
+        if self._gemini_available:
+            self.gemini_client = genai.Client(
                 vertexai=cfg.gemini.use_vertex,
                 api_key=self._active_api_key or None,
             )
             self._gen_config = self._build_gen_config(self._system_prompt)
             key_preview = (self._active_api_key or "")[:8] + "..."
             log.info(
-                "[%s] ready | provider=gemini | model=%s | %d tools | key=%s | %d key(s) available",
+                "[%s] gemini ready | model=%s | %d tools | key=%s | %d key(s)",
                 self.name,
                 cfg.gemini.model,
                 len(self.tools),
                 key_preview,
                 len(self._api_keys),
             )
-        elif self.llm_provider == "mistral":
-            self.client = Mistral(api_key=cfg.mistral.api_key)
-            self._mistral_tools = self._to_mistral_tools(self.tools)
-            log.info(
-                "[%s] ready | provider=mistral | model=%s | %d tools configured",
-                self.name,
-                cfg.mistral.model,
-                len(self.tools),
-            )
         else:
-            raise ValueError(f"Unsupported llm_provider '{self.llm_provider}'. Use 'gemini' or 'mistral'.")
+            self.gemini_client = None
+            self._gen_config = None
+            log.warning("[%s] gemini skipped — no API key configured", self.name)
+
+        # --- Mistral setup (always available as fallback) ---
+        self.mistral_client = Mistral(api_key=cfg.mistral.api_key)
+        self._mistral_tools = self._to_mistral_tools(self.tools)
+        log.info(
+            "[%s] mistral ready (fallback) | model=%s | %d tools",
+            self.name,
+            cfg.mistral.model,
+            len(self.tools),
+        )
+
+        # Keep legacy .client pointing at the primary provider for _extract_decision etc.
+        self.client = self.gemini_client if self._gemini_available else self.mistral_client
 
     @property
     def _active_api_key(self) -> str:
@@ -96,10 +106,11 @@ class TradingAgent(ABC):
         self._active_key_idx = (self._active_key_idx + 1) % len(self._api_keys)
         if self._active_key_idx == prev_idx:
             return False
-        self.client = genai.Client(
+        self.gemini_client = genai.Client(
             vertexai=self.cfg.gemini.use_vertex,
             api_key=self._active_api_key or None,
         )
+        self.client = self.gemini_client
         key_preview = (self._active_api_key or "")[:8] + "..."
         log.info("[%s] swapped to fallback API key %s", self.name, key_preview)
         return True
@@ -230,7 +241,7 @@ class TradingAgent(ABC):
         """Call Gemini with automatic key failover and retry on rate-limit (429)."""
         for attempt in range(MAX_RETRIES):
             try:
-                return self.client.models.generate_content(
+                return self.gemini_client.models.generate_content(
                     model=self.cfg.gemini.model,
                     contents=contents,
                     config=self._gen_config,
@@ -266,7 +277,7 @@ class TradingAgent(ABC):
                     kwargs["tool_choice"] = "auto"
                 if response_format:
                     kwargs["response_format"] = response_format
-                return self.client.chat.complete(**kwargs)
+                return self.mistral_client.chat.complete(**kwargs)
             except Exception as e:
                 if attempt == MAX_RETRIES - 1:
                     raise
@@ -280,10 +291,16 @@ class TradingAgent(ABC):
         return result["response"]
 
     def run_traced(self, user_message: str) -> dict[str, Any]:
-        """Like run(), but returns full trace: response, tool_calls, timing."""
-        if self.llm_provider == "mistral":
-            return self._run_traced_mistral(user_message)
-        return self._run_traced_gemini(user_message)
+        """Try Gemini first; on any failure fall back to Mistral."""
+        if self._gemini_available:
+            try:
+                return self._run_traced_gemini(user_message)
+            except Exception as e:
+                log.warning(
+                    "[%s] Gemini failed (%s), falling back to Mistral",
+                    self.name, e,
+                )
+        return self._run_traced_mistral(user_message)
 
     def _run_traced_gemini(self, user_message: str) -> dict[str, Any]:
         """Gemini execution with tool-calling loop."""
