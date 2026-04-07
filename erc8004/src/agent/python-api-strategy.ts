@@ -86,8 +86,8 @@ export class PythonApiStrategy implements TradingStrategy {
     reasoning: string
   ): number {
     const hasStrong = /strong|clear|significant|confident|breakout|momentum/i.test(reasoning);
-    if (action === "HOLD") return hasStrong ? 0.80 : 0.70;
-    return hasStrong ? 0.85 : 0.75;
+    if (action === "HOLD") return hasStrong ? 0.90 : 0.80;
+    return hasStrong ? 0.95 : 0.90;
   }
 
   private atrPositionSize(atr: number, price: number): number {
