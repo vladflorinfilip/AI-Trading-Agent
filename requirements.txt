@@ -1,4 +1,5 @@
 google-genai
+mistralai
 pyyaml
 python-dotenv
 fastapi

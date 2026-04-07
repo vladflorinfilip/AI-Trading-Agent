@@ -35,6 +35,37 @@ class TechnicalSignals:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
+def _coerce_candle(raw: Any) -> dict[str, float] | None:
+    """Normalize candle input from dict or Kraken-style list/tuple."""
+    if isinstance(raw, dict):
+        try:
+            return {
+                "open": float(raw.get("open", 0.0)),
+                "high": float(raw.get("high", 0.0)),
+                "low": float(raw.get("low", 0.0)),
+                "close": float(raw.get("close", 0.0)),
+                "volume": float(raw.get("volume", 0.0)),
+            }
+        except (TypeError, ValueError):
+            return None
+
+    if isinstance(raw, (list, tuple)) and len(raw) >= 7:
+        # Kraken OHLC array format:
+        # [time, open, high, low, close, vwap, volume, count]
+        try:
+            return {
+                "open": float(raw[1]),
+                "high": float(raw[2]),
+                "low": float(raw[3]),
+                "close": float(raw[4]),
+                "volume": float(raw[6]),
+            }
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    return None
+
+
 def _ema(values: list[float], period: int) -> list[float]:
     """Exponential moving average."""
     if len(values) < period:
@@ -122,14 +153,56 @@ def compute_signals(pair: str, candles: list[dict], ticker: dict | None = None, 
         ticker: Optional current ticker data for live price.
         orderbook: Optional orderbook dict with 'bids' and 'asks' arrays.
     """
-    closes = [float(c["close"]) for c in candles]
-    highs = [float(c["high"]) for c in candles]
-    lows = [float(c["low"]) for c in candles]
-    volumes = [float(c.get("volume", 0)) for c in candles]
+    normalized_candles = [c for c in (_coerce_candle(raw) for raw in candles) if c is not None]
+    closes = [c["close"] for c in normalized_candles]
+    highs = [c["high"] for c in normalized_candles]
+    lows = [c["low"] for c in normalized_candles]
+    volumes = [c["volume"] for c in normalized_candles]
 
     price = closes[-1] if closes else 0.0
     if ticker:
-        price = float(ticker.get("last", ticker.get("price", price)))
+        try:
+            if isinstance(ticker, dict):
+                # Handle direct price payload or pair-keyed payload.
+                if "last" in ticker or "price" in ticker:
+                    price = float(ticker.get("last", ticker.get("price", price)))
+                else:
+                    first = next((v for v in ticker.values() if isinstance(v, dict)), None)
+                    if first:
+                        # Kraken ticker uses "c": [last_trade_price, lot_volume]
+                        if "c" in first and isinstance(first["c"], (list, tuple)) and first["c"]:
+                            price = float(first["c"][0])
+                        elif "last" in first:
+                            price = float(first["last"])
+                        elif "price" in first:
+                            price = float(first["price"])
+        except (TypeError, ValueError):
+            pass
+
+    if not normalized_candles:
+        return TechnicalSignals(
+            pair=pair,
+            price=price,
+            sma_5=price,
+            sma_20=price,
+            sma_50=None,
+            trend="NEUTRAL",
+            rsi_14=50.0,
+            macd_line=0.0,
+            macd_signal=0.0,
+            macd_histogram=0.0,
+            bollinger_upper=price,
+            bollinger_middle=price,
+            bollinger_lower=price,
+            bollinger_pct_b=0.5,
+            atr_14=0.0,
+            volatility_pct=0.0,
+            support=price,
+            resistance=price,
+            volume_trend="FLAT",
+            orderbook_imbalance=None,
+            extra={"warning": "insufficient_candles"},
+        )
 
     sma_5 = _sma(closes, 5) or price
     sma_20 = _sma(closes, 20) or price
@@ -145,10 +218,17 @@ def compute_signals(pair: str, candles: list[dict], ticker: dict | None = None, 
     rsi = _rsi(closes, 14)
     macd_line, macd_sig, macd_hist = _macd(closes)
     bb_upper, bb_mid, bb_lower, bb_pct_b = _bollinger(closes)
-    atr = _atr(candles, 14)
+    atr = _atr(normalized_candles, 14)
 
-    recent_10 = candles[-10:] if len(candles) >= 10 else candles
-    avg_range = sum((float(c["high"]) - float(c["low"])) / max(float(c["close"]), 0.01) for c in recent_10) / len(recent_10) * 100
+    recent_10 = normalized_candles[-10:] if len(normalized_candles) >= 10 else normalized_candles
+    if recent_10:
+        avg_range = (
+            sum((c["high"] - c["low"]) / max(c["close"], 0.01) for c in recent_10)
+            / len(recent_10)
+            * 100
+        )
+    else:
+        avg_range = 0.0
 
     support = min(lows[-24:]) if len(lows) >= 24 else min(lows) if lows else 0
     resistance = max(highs[-24:]) if len(highs) >= 24 else max(highs) if highs else 0

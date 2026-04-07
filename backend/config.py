@@ -55,6 +55,14 @@ class GeminiConfig:
 
 
 @dataclass
+class MistralConfig:
+    model: str = field(default_factory=lambda: _get("mistral", "model", default="mistral-medium-latest"))
+    api_key: str = field(default_factory=lambda: _get("mistral", "api_key", env_var="MISTRAL_API_KEY", default=""))
+    temperature: float = field(default_factory=lambda: float(_get("mistral", "temperature", default=0.7)))
+    max_output_tokens: int = field(default_factory=lambda: int(_get("mistral", "max_output_tokens", default=2048)))
+
+
+@dataclass
 class AgentIdentityConfig:
     """On-chain identity of this agent — must match the AgentRegistry contract."""
     agent_id: int = field(default_factory=lambda: int(_get("identity", "agent_id", env_var="AGENT_ID", default=0)))
@@ -68,7 +76,9 @@ class AgentIdentityConfig:
 @dataclass
 class AgentConfig:
     kraken: KrakenConfig = field(default_factory=KrakenConfig)
+    llm_provider: str = field(default_factory=lambda: _get("agent", "llm_provider", env_var="LLM_PROVIDER", default="mistral"))
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
+    mistral: MistralConfig = field(default_factory=MistralConfig)
     identity: AgentIdentityConfig = field(default_factory=AgentIdentityConfig)
     max_agent_iterations: int = field(default_factory=lambda: int(_get("agent", "max_iterations", default=20)))
     log_level: str = field(default_factory=lambda: _get("agent", "log_level", default="INFO"))
