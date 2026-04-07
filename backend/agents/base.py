@@ -294,13 +294,21 @@ class TradingAgent(ABC):
         """Try Gemini first; on any failure fall back to Mistral."""
         if self._gemini_available:
             try:
-                return self._run_traced_gemini(user_message)
+                result = self._run_traced_gemini(user_message)
+                result["provider"] = "gemini"
+                return result
             except Exception as e:
                 log.warning(
                     "[%s] Gemini failed (%s), falling back to Mistral",
                     self.name, e,
                 )
-        return self._run_traced_mistral(user_message)
+                result = self._run_traced_mistral(user_message)
+                result["provider"] = "mistral"
+                result["fallback"] = True
+                return result
+        result = self._run_traced_mistral(user_message)
+        result["provider"] = "mistral"
+        return result
 
     def _run_traced_gemini(self, user_message: str) -> dict[str, Any]:
         """Gemini execution with tool-calling loop."""

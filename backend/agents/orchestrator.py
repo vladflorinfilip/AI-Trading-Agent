@@ -225,6 +225,9 @@ class Orchestrator:
             saved = self.store.save_run(query=query, stages=stages, decision=decision)
             result["id"] = saved["id"]
             result["timestamp"] = saved["timestamp"]
+            for s in stages:
+                provider = s.get("provider", "unknown")
+                self.store.record_llm_call(provider, s.get("agent", ""), fallback=s.get("fallback", False))
 
         return result
 

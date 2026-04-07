@@ -17,7 +17,9 @@
 
 <svelte:window on:keydown={handleKeydown} />
 
+<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
 <div class="modal-backdrop" on:click={close}>
+	<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
 	<div class="modal" on:click|stopPropagation>
 		<div class="modal-header">
 			<div>

@@ -172,7 +172,7 @@
 					<tbody>
 						{#each filteredTrades as trade}
 							<tr>
-								<td class="mono">{trade.time ? timeAgo(trade.time) : '--'}</td>
+								<td class="mono">{trade.time ? timeAgo(parseFloat(trade.time)) : '--'}</td>
 								<td><span class="decision-badge sm" style="background:{decisionColor((trade.type || trade.side || '').toUpperCase())}">{trade.type || trade.side || '?'}</span></td>
 								<td>{trade.pair || '--'}</td>
 								<td class="mono">{parseFloat(trade.vol || trade.volume || 0).toFixed(6)}</td>
