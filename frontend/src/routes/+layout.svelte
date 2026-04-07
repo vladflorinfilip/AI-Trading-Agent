@@ -20,6 +20,7 @@
 			<a href="/performance" class:active={path === '/performance' || path === '/'}>Performance</a>
 			<a href="/pipeline" class:active={path === '/pipeline'}>Pipeline</a>
 			<a href="/history" class:active={path === '/history'}>History</a>
+			<a href="/llm" class:active={path === '/llm'}>LLM Stats</a>
 		</div>
 	</nav>
 

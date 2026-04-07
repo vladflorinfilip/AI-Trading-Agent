@@ -43,4 +43,5 @@ export const api = {
 	portfolio: () => get<any>('/api/metrics/portfolio'),
 	performance: () => get<any>('/api/metrics/performance'),
 	onchain: () => get<any>('/api/metrics/onchain'),
+	llmStats: () => get<any>('/api/metrics/llm'),
 };

@@ -101,6 +101,28 @@ class RunStore:
         snapshots = [json.loads(e) for e in entries]
         return snapshots[-limit:]
 
+    # -- LLM provider stats --------------------------------------------------------
+
+    def record_llm_call(self, provider: str, agent: str, fallback: bool = False):
+        """Increment counters for LLM provider usage."""
+        if not self.r:
+            return
+        pipe = self.r.pipeline()
+        pipe.hincrby("llm_stats", f"{provider}:calls", 1)
+        pipe.hincrby("llm_stats", f"{provider}:{agent}", 1)
+        if fallback:
+            pipe.hincrby("llm_stats", "fallbacks", 1)
+        pipe.execute()
+
+    def get_llm_stats(self) -> dict[str, Any]:
+        if not self.r:
+            return {}
+        raw = self.r.hgetall("llm_stats")
+        result: dict[str, Any] = {}
+        for k, v in raw.items():
+            result[k] = int(v)
+        return result
+
     # -- On-chain metrics ----------------------------------------------------------
 
     def save_onchain_metrics(self, data: dict[str, Any]):

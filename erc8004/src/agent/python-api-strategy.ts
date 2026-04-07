@@ -105,7 +105,7 @@ export class PythonApiStrategy implements TradingStrategy {
       asset: data.pair.replace("USD", ""),
       pair: data.pair,
       amount: 0,
-      confidence: 0.5,
+      confidence: 0.75,
       reasoning: `[FALLBACK] ${reason}. Holding position.`,
     };
   }

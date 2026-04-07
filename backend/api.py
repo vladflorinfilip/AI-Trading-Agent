@@ -299,3 +299,20 @@ def get_onchain_metrics():
             "timestamp": 0,
         }
     return metrics
+
+
+# -- LLM provider metrics -----------------------------------------------------
+
+@app.get("/api/metrics/llm")
+def get_llm_metrics():
+    """Return Gemini vs Mistral call counts and fallback stats."""
+    raw = store.get_llm_stats()
+    return {
+        "gemini_calls": raw.get("gemini:calls", 0),
+        "mistral_calls": raw.get("mistral:calls", 0),
+        "fallbacks": raw.get("fallbacks", 0),
+        "by_agent": {
+            "gemini": {k.split(":", 1)[1]: v for k, v in raw.items() if k.startswith("gemini:") and k != "gemini:calls"},
+            "mistral": {k.split(":", 1)[1]: v for k, v in raw.items() if k.startswith("mistral:") and k != "mistral:calls"},
+        },
+    }

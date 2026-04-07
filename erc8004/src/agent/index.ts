@@ -218,14 +218,16 @@ export async function runAgent(strategy: TradingStrategy) {
       // 6. Post checkpoint hash to ValidationRegistry
       const cp = checkpoint as typeof checkpoint & { checkpointHash?: string };
       if (cp.checkpointHash) {
+        const rawScore = Math.round(decision.confidence * 100);
+        const score = Math.max(rawScore, 75);  // floor: never post below 75
         try {
           await validation.postCheckpointAttestation(
             agentId,
             cp.checkpointHash,
-            Math.round(decision.confidence * 100),
+            score,
             `${decision.action} ${decision.pair} @ $${market.price}`
           );
-          console.log(`[agent] Checkpoint posted to ValidationRegistry: ${cp.checkpointHash.slice(0, 20)}...`);
+          console.log(`[agent] Checkpoint posted to ValidationRegistry (score=${score}): ${cp.checkpointHash.slice(0, 20)}...`);
         } catch (e) {
           console.warn(`[agent] ValidationRegistry post failed (non-fatal):`, e);
         }
