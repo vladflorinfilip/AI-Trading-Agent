@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -11,6 +12,7 @@ import yaml
 from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
+from mistralai.client import Mistral
 
 from ..config import AgentConfig
 from ..kraken_client import KrakenClient
@@ -35,7 +37,7 @@ def _parse_retry_delay(error_msg: str) -> float:
 
 
 class TradingAgent(ABC):
-    """Base class: Gemini model with function-calling wired to Kraken CLI."""
+    """Base class: LLM model with function-calling wired to Kraken CLI."""
 
     def __init__(
         self,
@@ -47,17 +49,38 @@ class TradingAgent(ABC):
         self.kraken = KrakenClient(cfg.kraken)
         self.prompt_data = load_prompt(prompt_name)
         self.name = self.prompt_data.get("role", self.__class__.__name__)
+        self.llm_provider = (cfg.llm_provider or "mistral").strip().lower()
+        self.tools = tools
+        self._system_prompt = self._build_system_prompt()
         self._api_keys: list[str] = [k for k in [cfg.gemini.api_key, cfg.gemini.fallback_api_key] if k]
         self._active_key_idx = 0
-        self.client = genai.Client(
-            vertexai=cfg.gemini.use_vertex,
-            api_key=self._active_api_key or None,
-        )
-        self.tools = tools
-        self._gen_config = self._build_gen_config()
-        key_preview = (self._active_api_key or "")[:8] + "..."
-        log.info("[%s] ready | model=%s | %d tools | key=%s | %d key(s) available",
-                 self.name, cfg.gemini.model, len(self.tools), key_preview, len(self._api_keys))
+
+        if self.llm_provider == "gemini":
+            self.client = genai.Client(
+                vertexai=cfg.gemini.use_vertex,
+                api_key=self._active_api_key or None,
+            )
+            self._gen_config = self._build_gen_config(self._system_prompt)
+            key_preview = (self._active_api_key or "")[:8] + "..."
+            log.info(
+                "[%s] ready | provider=gemini | model=%s | %d tools | key=%s | %d key(s) available",
+                self.name,
+                cfg.gemini.model,
+                len(self.tools),
+                key_preview,
+                len(self._api_keys),
+            )
+        elif self.llm_provider == "mistral":
+            self.client = Mistral(api_key=cfg.mistral.api_key)
+            self._mistral_tools = self._to_mistral_tools(self.tools)
+            log.info(
+                "[%s] ready | provider=mistral | model=%s | %d tools configured",
+                self.name,
+                cfg.mistral.model,
+                len(self.tools),
+            )
+        else:
+            raise ValueError(f"Unsupported llm_provider '{self.llm_provider}'. Use 'gemini' or 'mistral'.")
 
     @property
     def _active_api_key(self) -> str:
@@ -81,7 +104,7 @@ class TradingAgent(ABC):
         log.info("[%s] swapped to fallback API key %s", self.name, key_preview)
         return True
 
-    def _build_gen_config(self) -> types.GenerateContentConfig:
+    def _build_system_prompt(self) -> str:
         template_vars = {
             "pairs": ", ".join(self.cfg.trading_pairs),
             "mode": "paper trading (simulated)" if self.cfg.kraken.paper_mode else "LIVE trading (real money)",
@@ -101,7 +124,9 @@ class TradingAgent(ABC):
             system_prompt += "\n\nConstraints:\n" + "\n".join(
                 f"- {c}" for c in constraints
             )
+        return system_prompt
 
+    def _build_gen_config(self, system_prompt: str) -> types.GenerateContentConfig:
         thinking = None
         if self.cfg.gemini.thinking_level:
             thinking = types.ThinkingConfig(thinking_level=self.cfg.gemini.thinking_level)
@@ -113,6 +138,41 @@ class TradingAgent(ABC):
             tools=[types.Tool(function_declarations=self.tools)],
             thinking_config=thinking,
         )
+
+    def _to_mistral_schema(self, schema: dict[str, Any]) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
+        for key, value in schema.items():
+            if value is None:
+                continue
+            if key == "type" and isinstance(value, str):
+                normalized[key] = value.lower()
+                continue
+            if isinstance(value, dict):
+                normalized[key] = self._to_mistral_schema(value)
+            elif isinstance(value, list):
+                normalized[key] = [
+                    self._to_mistral_schema(v) if isinstance(v, dict) else v
+                    for v in value
+                ]
+            else:
+                normalized[key] = value
+        return normalized
+
+    def _to_mistral_tools(self, tools: list[types.FunctionDeclaration]) -> list[dict[str, Any]]:
+        mistral_tools: list[dict[str, Any]] = []
+        for tool in tools:
+            schema_dict = tool.parameters.model_dump(by_alias=True, exclude_none=True)
+            mistral_tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "parameters": self._to_mistral_schema(schema_dict),
+                    },
+                }
+            )
+        return mistral_tools
 
     def dispatch_tool(self, name: str, args: dict[str, Any]) -> Any:
         """Route a Gemini function call to the matching KrakenClient method or local analysis."""
@@ -135,9 +195,26 @@ class TradingAgent(ABC):
         interval = args.get("interval", 60)
         try:
             candles_raw = self.kraken.ohlc(pair, interval)
-            candles = candles_raw if isinstance(candles_raw, list) else candles_raw.get("candles", candles_raw.get("result", []))
-            if isinstance(candles, dict):
-                candles = next(iter(candles.values()), [])
+            if isinstance(candles_raw, list):
+                candles = candles_raw
+            elif isinstance(candles_raw, dict):
+                # Handle multiple Kraken CLI response shapes:
+                # - {"candles":[...]}
+                # - {"result":{"XBT/USD":[...], "last":...}}
+                # - {"XBT/USD":[...], "last":...}
+                candles = candles_raw.get("candles")
+                if candles is None:
+                    result_block = candles_raw.get("result")
+                    if isinstance(result_block, dict):
+                        candles = result_block.get(pair)
+                        if candles is None:
+                            candles = next((v for v in result_block.values() if isinstance(v, list)), [])
+                if candles is None:
+                    candles = candles_raw.get(pair)
+                if candles is None:
+                    candles = next((v for v in candles_raw.values() if isinstance(v, list)), [])
+            else:
+                candles = []
             ticker = self.kraken.ticker(pair)
             try:
                 orderbook = self.kraken.orderbook(pair, count=10)
@@ -169,6 +246,34 @@ class TradingAgent(ABC):
                 log.info("[%s] rate limited (all keys exhausted), waiting %.0fs...", self.name, wait)
                 time.sleep(wait)
 
+    def _call_mistral(
+        self,
+        messages: list[dict[str, Any]],
+        response_format: dict[str, Any] | None = None,
+        include_tools: bool = True,
+    ):
+        """Call Mistral chat.complete with retries on transient failures."""
+        for attempt in range(MAX_RETRIES):
+            try:
+                kwargs: dict[str, Any] = {
+                    "model": self.cfg.mistral.model,
+                    "messages": messages,
+                    "temperature": self.cfg.mistral.temperature,
+                    "max_tokens": self.cfg.mistral.max_output_tokens,
+                }
+                if include_tools:
+                    kwargs["tools"] = self._mistral_tools
+                    kwargs["tool_choice"] = "auto"
+                if response_format:
+                    kwargs["response_format"] = response_format
+                return self.client.chat.complete(**kwargs)
+            except Exception as e:
+                if attempt == MAX_RETRIES - 1:
+                    raise
+                wait = min(2 ** attempt, 10)
+                log.info("[%s] mistral call failed (%s), retrying in %ss", self.name, e, wait)
+                time.sleep(wait)
+
     def run(self, user_message: str) -> str:
         """Single turn: user message -> final text response."""
         result = self.run_traced(user_message)
@@ -176,6 +281,12 @@ class TradingAgent(ABC):
 
     def run_traced(self, user_message: str) -> dict[str, Any]:
         """Like run(), but returns full trace: response, tool_calls, timing."""
+        if self.llm_provider == "mistral":
+            return self._run_traced_mistral(user_message)
+        return self._run_traced_gemini(user_message)
+
+    def _run_traced_gemini(self, user_message: str) -> dict[str, Any]:
+        """Gemini execution with tool-calling loop."""
         log.info("[%s] run | %.100s", self.name, user_message)
         t_start = time.perf_counter()
         traced_tools: list[dict[str, Any]] = []
@@ -223,6 +334,72 @@ class TradingAgent(ABC):
                     )
                 )
             contents.append(types.Content(role="user", parts=tool_responses))
+
+        log.warning("[%s] max iterations reached", self.name)
+        return self._trace_result("[max iterations reached]", traced_tools, t_start)
+
+    def _run_traced_mistral(self, user_message: str) -> dict[str, Any]:
+        """Mistral execution with tool-calling loop."""
+        log.info("[%s] run | %.100s", self.name, user_message)
+        t_start = time.perf_counter()
+        traced_tools: list[dict[str, Any]] = []
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": self._system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+
+        for i in range(1, self.cfg.max_agent_iterations + 1):
+            response = self._call_mistral(messages=messages, include_tools=True)
+            if not response.choices:
+                log.warning("[%s] empty response from model", self.name)
+                return self._trace_result("[no response from model]", traced_tools, t_start)
+
+            msg = response.choices[0].message
+            tool_calls = msg.tool_calls or []
+
+            if not tool_calls:
+                text = msg.content if isinstance(msg.content, str) else json.dumps(msg.content or "")
+                ms = (time.perf_counter() - t_start) * 1000
+                log.info("[%s] done | %d steps | %.0fms", self.name, i, ms)
+                return self._trace_result(text, traced_tools, t_start)
+
+            log.info("[%s] step %d | tools: %s", self.name, i, ", ".join(tc.function.name for tc in tool_calls))
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [tc.model_dump(exclude_none=True) for tc in tool_calls],
+                }
+            )
+
+            for tc in tool_calls:
+                t_tool = time.perf_counter()
+                raw_args = tc.function.arguments
+                if isinstance(raw_args, str):
+                    try:
+                        args = json.loads(raw_args) if raw_args else {}
+                    except json.JSONDecodeError:
+                        args = {}
+                else:
+                    args = dict(raw_args or {})
+                result = self.dispatch_tool(tc.function.name, args)
+                traced_tools.append(
+                    {
+                        "step": i,
+                        "name": tc.function.name,
+                        "args": args,
+                        "result": result,
+                        "duration_ms": round((time.perf_counter() - t_tool) * 1000),
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": tc.function.name,
+                        "content": json.dumps({"result": result}),
+                    }
+                )
 
         log.warning("[%s] max iterations reached", self.name)
         return self._trace_result("[max iterations reached]", traced_tools, t_start)

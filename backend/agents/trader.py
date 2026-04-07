@@ -78,6 +78,26 @@ class Trader(TradingAgent):
             "Extract the primary trade decision as JSON, following the schema exactly.\n\n"
             f"{analysis_text}"
         )
+        if self.llm_provider == "mistral":
+            response = self._call_mistral(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You extract a single trade decision object. "
+                            "Return valid JSON only, with keys: pair, action, amount_usd, max_slippage_bps, rationale."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                include_tools=False,
+            )
+            content = response.choices[0].message.content if response.choices else "{}"
+            if isinstance(content, list):
+                content = "".join(getattr(chunk, "text", "") for chunk in content)
+            return json.loads(content or "{}")
+
         response = self.client.models.generate_content(
             model=self.cfg.gemini.model,
             contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
