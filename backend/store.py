@@ -58,10 +58,22 @@ class RunStore:
         raw = self.r.get(f"{_RUN_PREFIX}{run_id}")
         return json.loads(raw) if raw else None
 
-    def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_runs(
+        self,
+        limit: int = 50,
+        from_ts: float | None = None,
+        to_ts: float | None = None,
+    ) -> list[dict[str, Any]]:
         if not self.r:
             return []
-        run_ids = self.r.zrevrange(_RUNS_KEY, 0, limit - 1)
+        if from_ts is not None or to_ts is not None:
+            max_score = to_ts if to_ts is not None else "+inf"
+            min_score = from_ts if from_ts is not None else "-inf"
+            run_ids = self.r.zrevrangebyscore(
+                _RUNS_KEY, max_score, min_score, start=0, num=limit,
+            )
+        else:
+            run_ids = self.r.zrevrange(_RUNS_KEY, 0, limit - 1)
         if not run_ids:
             return []
         pipe = self.r.pipeline()

@@ -101,8 +101,14 @@ def get_paper_status():
 def get_paper_history():
     data = _kraken_call(kraken.paper_history)
     if isinstance(data, dict):
-        return data.get("trades", data.get("history", data.get("orders", [])))
-    return data if isinstance(data, list) else []
+        trades = data.get("trades", data.get("history", data.get("orders", [])))
+    else:
+        trades = data if isinstance(data, list) else []
+    if isinstance(trades, dict):
+        trades = list(trades.values())
+    if not isinstance(trades, list):
+        trades = []
+    return trades
 
 
 # -- Agent ---------------------------------------------------------------------
@@ -143,8 +149,8 @@ def run_pipeline(req: PipelineRequest):
 # -- History -------------------------------------------------------------------
 
 @app.get("/api/history")
-def get_history(limit: int = 50):
-    return store.list_runs(limit=limit)
+def get_history(limit: int = 200, from_ts: float | None = None, to_ts: float | None = None):
+    return store.list_runs(limit=limit, from_ts=from_ts, to_ts=to_ts)
 
 
 @app.get("/api/history/{run_id}")
