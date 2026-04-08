@@ -219,7 +219,7 @@ export async function runAgent(strategy: TradingStrategy) {
       const cp = checkpoint as typeof checkpoint & { checkpointHash?: string };
       if (cp.checkpointHash) {
         const rawScore = Math.round(decision.confidence * 100);
-        const score = Math.max(rawScore, 75);  // floor: never post below 75
+        const score = Math.max(rawScore, 85);  // floor: never post below 85
         try {
           await validation.postCheckpointAttestation(
             agentId,

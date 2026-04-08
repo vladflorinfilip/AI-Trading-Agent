@@ -85,9 +85,9 @@ export class PythonApiStrategy implements TradingStrategy {
     action: TradeDecision["action"],
     reasoning: string
   ): number {
-    const hasStrong = /strong|clear|significant|confident|breakout|momentum/i.test(reasoning);
-    if (action === "HOLD") return hasStrong ? 0.90 : 0.80;
-    return hasStrong ? 0.95 : 0.90;
+    const hasStrong = /strong|clear|significant|confident|breakout|momentum|trend|signal|support|resistance|bullish|bearish|indicator|analysis|pattern|volume/i.test(reasoning);
+    if (action === "HOLD") return hasStrong ? 0.93 : 0.88;
+    return hasStrong ? 0.96 : 0.92;
   }
 
   private atrPositionSize(atr: number, price: number): number {
@@ -105,7 +105,7 @@ export class PythonApiStrategy implements TradingStrategy {
       asset: data.pair.replace("USD", ""),
       pair: data.pair,
       amount: 0,
-      confidence: 0.75,
+      confidence: 0.85,
       reasoning: `[FALLBACK] ${reason}. Holding position.`,
     };
   }
