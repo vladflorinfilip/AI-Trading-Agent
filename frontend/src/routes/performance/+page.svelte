@@ -119,6 +119,14 @@
 	$: buyPct  = totalDecisions ? (decisions.BUY  / totalDecisions) * 100 : 0;
 	$: sellPct = totalDecisions ? (decisions.SELL / totalDecisions) * 100 : 0;
 	$: holdPct = totalDecisions ? (decisions.HOLD / totalDecisions) * 100 : 0;
+	$: holdings = portfolio?.holdings || [];
+
+	function fmtHoldingAmount(asset, amount) {
+		if (asset === 'BTC') return Number(amount || 0).toFixed(8);
+		if (['ETH', 'SOL', 'BNB', 'XRP', 'POL', 'MATIC'].includes(asset)) return Number(amount || 0).toFixed(6);
+		if (asset === 'USD') return fmt$(amount || 0);
+		return Number(amount || 0).toFixed(6);
+	}
 </script>
 
 <div class="page">
@@ -262,28 +270,19 @@
 	{/if}
 
 	<!-- Holdings -->
-	{#if portfolio && (portfolio.btc_balance > 0 || portfolio.eth_balance > 0)}
+	{#if portfolio && holdings.length > 0}
 		<div class="card">
 			<h2>Holdings</h2>
 			<div class="holdings-grid">
-				<div class="holding">
-					<span class="holding-asset">USD</span>
-					<span class="holding-value mono">{fmt$(portfolio.usd_balance)}</span>
-				</div>
-				{#if portfolio.btc_balance > 0}
+				{#each holdings as h}
 					<div class="holding">
-						<span class="holding-asset">BTC</span>
-						<span class="holding-value mono">{portfolio.btc_balance.toFixed(8)}</span>
-						<span class="holding-usd">{fmt$(portfolio.btc_balance * portfolio.btc_price)}</span>
+						<span class="holding-asset">{h.asset}</span>
+						<span class="holding-value mono">{fmtHoldingAmount(h.asset, h.amount)}</span>
+						{#if h.asset !== 'USD'}
+							<span class="holding-usd">{fmt$(h.usd_value)}</span>
+						{/if}
 					</div>
-				{/if}
-				{#if portfolio.eth_balance > 0}
-					<div class="holding">
-						<span class="holding-asset">ETH</span>
-						<span class="holding-value mono">{portfolio.eth_balance.toFixed(6)}</span>
-						<span class="holding-usd">{fmt$(portfolio.eth_balance * portfolio.eth_price)}</span>
-					</div>
-				{/if}
+				{/each}
 			</div>
 		</div>
 	{/if}

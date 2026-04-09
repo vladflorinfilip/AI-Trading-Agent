@@ -174,31 +174,77 @@ def get_portfolio_metrics():
     except KrakenCLIError:
         balances = {}
 
-    btc_price = 0.0
-    try:
-        td = kraken.ticker("BTC/USD")
-        for v in td.values():
-            btc_price = float(v.get("c", [0])[0])
-            break
-    except KrakenCLIError:
-        pass
+    def _extract_total(entry: Any) -> float:
+        if isinstance(entry, (int, float)):
+            return float(entry)
+        if isinstance(entry, dict):
+            try:
+                return float(entry.get("total", 0))
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
 
-    usd = float((balances.get("USD") or {}).get("total", 0))
-    btc = float(
-        (balances.get("XBT") or balances.get("BTC") or {}).get("total", 0)
-    )
-    eth = float((balances.get("ETH") or {}).get("total", 0))
+    # Build a USD price map from configured trading pairs (e.g., BTC/USD -> BTC price).
+    price_by_asset: dict[str, float] = {}
+    for pair in cfg.trading_pairs:
+        if "/" not in pair:
+            continue
+        base, quote = pair.split("/", 1)
+        if quote.upper() != "USD":
+            continue
+        try:
+            td = kraken.ticker(pair)
+            for v in td.values():
+                if isinstance(v, dict):
+                    price_by_asset[base.upper()] = float(v.get("c", [0])[0])
+                    break
+        except (KrakenCLIError, TypeError, ValueError):
+            continue
 
-    eth_price = 0.0
-    try:
-        td = kraken.ticker("ETH/USD")
-        for v in td.values():
-            eth_price = float(v.get("c", [0])[0])
-            break
-    except KrakenCLIError:
-        pass
+    # Alias common symbols so holdings value correctly.
+    if "BTC" in price_by_asset and "XBT" not in price_by_asset:
+        price_by_asset["XBT"] = price_by_asset["BTC"]
+    if "POL" in price_by_asset and "MATIC" not in price_by_asset:
+        price_by_asset["MATIC"] = price_by_asset["POL"]
 
-    total = usd + btc * btc_price + eth * eth_price
+    usd = _extract_total(balances.get("USD") or balances.get("ZUSD"))
+    holdings: list[dict[str, Any]] = [
+        {
+            "asset": "USD",
+            "amount": round(usd, 8),
+            "price_usd": 1.0,
+            "usd_value": round(usd, 2),
+        }
+    ]
+
+    total = usd
+    for asset, raw_amt in balances.items():
+        sym = str(asset).upper()
+        if sym in {"USD", "ZUSD"}:
+            continue
+        amount = _extract_total(raw_amt)
+        if amount <= 0:
+            continue
+        price = float(price_by_asset.get(sym, 0.0))
+        usd_value = amount * price if price > 0 else 0.0
+        total += usd_value
+        display_asset = "BTC" if sym == "XBT" else sym
+        holdings.append(
+            {
+                "asset": display_asset,
+                "amount": round(amount, 8),
+                "price_usd": round(price, 8),
+                "usd_value": round(usd_value, 2),
+            }
+        )
+
+    # Keep legacy fields for existing UI components.
+    btc = next((h["amount"] for h in holdings if h["asset"] == "BTC"), 0.0)
+    eth = next((h["amount"] for h in holdings if h["asset"] == "ETH"), 0.0)
+    btc_price = float(price_by_asset.get("BTC", price_by_asset.get("XBT", 0.0)))
+    eth_price = float(price_by_asset.get("ETH", 0.0))
+
+    holdings = [holdings[0]] + sorted(holdings[1:], key=lambda h: h["usd_value"], reverse=True)
     pnl = total - starting_balance
     pnl_pct = (pnl / starting_balance * 100) if starting_balance else 0
 
@@ -231,6 +277,7 @@ def get_portfolio_metrics():
         "btc_price": round(btc_price, 2),
         "eth_balance": eth,
         "eth_price": round(eth_price, 2),
+        "holdings": holdings,
         "pnl": round(pnl, 2),
         "pnl_pct": round(pnl_pct, 2),
         "trade_count": len(trades),

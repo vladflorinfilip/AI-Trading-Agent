@@ -18,6 +18,10 @@ trading:
   pairs:
     - BTC/USD
     - ETH/USD
+    - SOL/USD
+    - XRP/USD
+    - BNB/USD
+    - POL/USD
 
 identity:
   chain: sepolia
@@ -30,9 +34,17 @@ risk_router:
   allowed_markets:
     - XBTUSD
     - ETHUSD
+    - SOLUSD
+    - XRPUSD
+    - BNBUSD
+    - POLUSD
   leverage_caps:                    # 1 = spot only; raise when margin trading enabled
     XBTUSD: 1
     ETHUSD: 1
+    SOLUSD: 1
+    XRPUSD: 1
+    BNBUSD: 1
+    POLUSD: 1
   whitelisted_routes:               # tried in order; first entry is preferred
     - kraken_spot
     - uniswap_v3
