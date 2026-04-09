@@ -215,25 +215,8 @@ export async function runAgent(strategy: TradingStrategy) {
 
       console.log(formatCheckpointLog(checkpoint));
 
-      // 6. Post checkpoint hash to ValidationRegistry
-      const cp = checkpoint as typeof checkpoint & { checkpointHash?: string };
-      if (cp.checkpointHash) {
-        const rawScore = Math.round(decision.confidence * 100);
-        const score = Math.max(rawScore, 85);  // floor: never post below 85
-        try {
-          await validation.postCheckpointAttestation(
-            agentId,
-            cp.checkpointHash,
-            score,
-            `${decision.action} ${decision.pair} @ $${market.price}`
-          );
-          console.log(`[agent] Checkpoint posted to ValidationRegistry (score=${score}): ${cp.checkpointHash.slice(0, 20)}...`);
-        } catch (e) {
-          console.warn(`[agent] ValidationRegistry post failed (non-fatal):`, e);
-        }
-      }
-
-      // 7. Persist to checkpoints.jsonl
+      // 6. Persist to checkpoints.jsonl
+      // Validation attestations are posted by the hackathon bot, not by us
       fs.appendFileSync(CHECKPOINTS_FILE, JSON.stringify(checkpoint) + "\n");
 
       // 8. Publish on-chain metrics to the Python backend for the dashboard
