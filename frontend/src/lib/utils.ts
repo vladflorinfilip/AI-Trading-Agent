@@ -46,9 +46,23 @@ export function fmtPnl(v: number): string {
 	return (v >= 0 ? '+$' : '-$') + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function timeAgo(ts: number): string {
+export function parseUnixTs(v: unknown): number {
+	if (typeof v === 'number') return v > 1e12 ? v / 1000 : v;
+	if (typeof v === 'string') {
+		const n = Number(v);
+		if (!isNaN(n) && /^\d+(\.\d+)?$/.test(v.trim()))
+			return n > 1e12 ? n / 1000 : n;
+		const ms = new Date(v).getTime();
+		if (!isNaN(ms)) return ms / 1000;
+	}
+	return 0;
+}
+
+export function timeAgo(v: unknown): string {
+	const ts = parseUnixTs(v);
 	if (!ts) return '';
 	const diff = Math.floor(Date.now() / 1000) - ts;
+	if (diff < 0) return 'just now';
 	if (diff < 60) return `${diff}s ago`;
 	if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
 	if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;

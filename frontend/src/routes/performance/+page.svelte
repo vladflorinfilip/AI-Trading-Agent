@@ -1,7 +1,14 @@
 <script>
 	import { api } from '$lib/api';
 	import { onMount } from 'svelte';
+	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
 	import { fmt$, fmtPct, fmtPnl, formatTimestamp, formatTime, timeAgo, niceStep } from '$lib/utils';
+
+	const PAIRS = ['BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD', 'BNB/USD', 'POL/USD'];
+
+	let selectedPair = 'BTC/USD';
+	let pairDropdownOpen = false;
 
 	let ticker = null;
 	let portfolio = null;
@@ -15,11 +22,38 @@
 	const chartH = 220;
 	const pad = { top: 24, right: 16, bottom: 32, left: 64 };
 
+	function initFromUrl() {
+		const p = $page.url.searchParams.get('pair');
+		if (p && PAIRS.includes(p)) selectedPair = p;
+	}
+
+	function syncUrl() {
+		const params = new URLSearchParams($page.url.searchParams);
+		params.set('pair', selectedPair);
+		const target = `${$page.url.pathname}?${params}`;
+		if (target !== `${$page.url.pathname}?${$page.url.searchParams}`) {
+			goto(target, { replaceState: true, keepFocus: true, noScroll: true });
+		}
+	}
+
+	function selectPair(pair) {
+		selectedPair = pair;
+		pairDropdownOpen = false;
+		syncUrl();
+		refreshTicker();
+	}
+
+	async function refreshTicker() {
+		try {
+			ticker = await api.ticker(selectedPair);
+		} catch (_) { /* keep previous */ }
+	}
+
 	async function refresh() {
 		try {
 			error = '';
 			const results = await Promise.allSettled([
-				api.ticker('BTC/USD'),
+				api.ticker(selectedPair),
 				api.portfolio(),
 				api.performance(),
 				api.onchain(),
@@ -34,6 +68,7 @@
 	}
 
 	onMount(() => {
+		initFromUrl();
 		refresh();
 		const interval = setInterval(refresh, 30000);
 		return () => clearInterval(interval);
@@ -85,14 +120,38 @@
 		return ticks;
 	})();
 
+	function fmtXLabel(ts) {
+		const d = new Date(ts * 1000);
+		if (tsRange > 86400 * 2)
+			return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+		if (tsRange > 86400)
+			return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
+				d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+		return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+	}
+
 	$: xTicks = (() => {
 		if (chartData.length < 2) return [];
-		const count = Math.min(6, chartData.length);
-		const step = Math.max(1, Math.floor((chartData.length - 1) / (count - 1)));
+		const labelW = 72;
+		const maxTicks = Math.max(2, Math.floor(plotW / labelW));
+		const count = Math.min(maxTicks, chartData.length);
+		const timeStep = tsRange / (count - 1);
 		const ticks = [];
-		for (let i = 0; i < chartData.length; i += step) ticks.push(chartData[i]);
-		if (ticks[ticks.length - 1]?.ts !== chartData[chartData.length - 1]?.ts) {
-			ticks.push(chartData[chartData.length - 1]);
+		for (let i = 0; i < count; i++) {
+			const targetTs = tsMin + i * timeStep;
+			let best = null, bestDist = Infinity;
+			for (const d of chartData) {
+				const dist = Math.abs(d.ts - targetTs);
+				if (dist < bestDist) { bestDist = dist; best = d; }
+			}
+			if (best && (ticks.length === 0 || ticks[ticks.length - 1].ts !== best.ts)) {
+				ticks.push(best);
+			}
+		}
+		for (let i = ticks.length - 1; i > 0; i--) {
+			if (fmtXLabel(ticks[i].ts) === fmtXLabel(ticks[i - 1].ts)) {
+				ticks.splice(i, 1);
+			}
 		}
 		return ticks;
 	})();
@@ -119,7 +178,18 @@
 	$: buyPct  = totalDecisions ? (decisions.BUY  / totalDecisions) * 100 : 0;
 	$: sellPct = totalDecisions ? (decisions.SELL / totalDecisions) * 100 : 0;
 	$: holdPct = totalDecisions ? (decisions.HOLD / totalDecisions) * 100 : 0;
-	$: holdings = portfolio?.holdings || [];
+	$: holdings = (() => {
+		const raw = portfolio?.holdings || [];
+		const byAsset = new Map(raw.map(h => [h.asset, h]));
+		const allAssets = ['USD', ...PAIRS.map(p => p.split('/')[0])];
+		return allAssets.map(asset => byAsset.get(asset) || { asset, amount: 0, price_usd: 0, usd_value: 0 });
+	})();
+
+	function handleWindowClick(e) {
+		if (pairDropdownOpen && !e.target.closest('.pair-card')) {
+			pairDropdownOpen = false;
+		}
+	}
 
 	function fmtHoldingAmount(asset, amount) {
 		if (asset === 'BTC') return Number(amount || 0).toFixed(8);
@@ -128,6 +198,8 @@
 		return Number(amount || 0).toFixed(6);
 	}
 </script>
+
+<svelte:window on:click={handleWindowClick} />
 
 <div class="page">
 	{#if error}
@@ -153,8 +225,20 @@
 				<span class="stat-sub" class:positive={portfolio.pnl >= 0} class:negative={portfolio.pnl < 0}>{fmtPct(portfolio.pnl_pct)}</span>
 			{:else}<span class="stat-value dim">--</span>{/if}
 		</div>
-		<div class="stat-card">
-			<span class="stat-label">BTC / USD</span>
+		<div class="stat-card pair-card">
+			<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+			<div class="pair-selector" on:click={() => pairDropdownOpen = !pairDropdownOpen}>
+				<span class="stat-label">{selectedPair.replace('/', ' / ')} <span class="pair-caret">{pairDropdownOpen ? '▴' : '▾'}</span></span>
+			</div>
+			{#if pairDropdownOpen}
+				<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+				<div class="pair-dropdown">
+					{#each PAIRS as pair}
+						<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+						<div class="pair-option" class:active={pair === selectedPair} on:click={() => selectPair(pair)}>{pair}</div>
+					{/each}
+				</div>
+			{/if}
 			{#if ticker}
 				<span class="stat-value">${parseFloat(ticker.c?.[0] || '0').toLocaleString()}</span>
 				<span class="stat-sub">Ask {parseFloat(ticker.a?.[0] || '0').toLocaleString()} · Bid {parseFloat(ticker.b?.[0] || '0').toLocaleString()}</span>
@@ -230,7 +314,7 @@
 					<path d={areaPath} fill="url(#areaGrad)" />
 					<path d={linePath} fill="none" stroke={accentColor} stroke-width="2.5" stroke-linejoin="round" />
 					{#each xTicks as d}
-						<text x={sx(d.ts)} y={chartH - 6} fill="#8c7a68" font-size="10" text-anchor="middle" font-family="'JetBrains Mono', monospace">{formatTimestamp(d.ts)}</text>
+						<text x={sx(d.ts)} y={chartH - 6} fill="#8c7a68" font-size="10" text-anchor="middle" font-family="'JetBrains Mono', monospace">{fmtXLabel(d.ts)}</text>
 					{/each}
 					{#if hoverPoint}
 						<line x1={hoverX} y1={pad.top} x2={hoverX} y2={pad.top + plotH} stroke="#8c7a68" stroke-width="1" stroke-dasharray="3,3" />
@@ -270,19 +354,36 @@
 	{/if}
 
 	<!-- Holdings -->
-	{#if portfolio && holdings.length > 0}
+	{#if portfolio}
 		<div class="card">
-			<h2>Holdings</h2>
-			<div class="holdings-grid">
-				{#each holdings as h}
-					<div class="holding">
-						<span class="holding-asset">{h.asset}</span>
-						<span class="holding-value mono">{fmtHoldingAmount(h.asset, h.amount)}</span>
-						{#if h.asset !== 'USD'}
-							<span class="holding-usd">{fmt$(h.usd_value)}</span>
-						{/if}
-					</div>
-				{/each}
+			<h2>Portfolio Holdings</h2>
+			<div class="holdings-table-wrap">
+				<table class="holdings-table">
+					<thead>
+						<tr>
+							<th>Asset</th>
+							<th>Amount</th>
+							<th>Price</th>
+							<th>Value</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each holdings as h}
+							<tr class:zero={h.amount === 0}>
+								<td class="holding-asset-cell">{h.asset}</td>
+								<td class="mono">{fmtHoldingAmount(h.asset, h.amount)}</td>
+								<td class="mono">{h.asset === 'USD' ? '--' : h.price_usd > 0 ? fmt$(h.price_usd) : '--'}</td>
+								<td class="mono">{fmt$(h.usd_value)}</td>
+							</tr>
+						{/each}
+					</tbody>
+					<tfoot>
+						<tr>
+							<td colspan="3">Total</td>
+							<td class="mono">{fmt$(portfolio.total_value)}</td>
+						</tr>
+					</tfoot>
+				</table>
 			</div>
 		</div>
 	{/if}
@@ -307,7 +408,34 @@
 		gap: 0.2rem;
 		box-shadow: 0 1px 3px rgba(61, 46, 31, 0.04);
 	}
-	.stat-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: #8c7a68; font-weight: 600; }
+	.stat-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: #8c7a68; font-weight: 600; user-select: none; }
+
+	.pair-card { position: relative; }
+	.pair-selector { cursor: pointer; }
+	.pair-selector:hover .stat-label { color: #3d2e1f; }
+	.pair-caret { font-size: 0.6rem; margin-left: 0.15rem; }
+	.pair-dropdown {
+		position: absolute;
+		top: 2.2rem;
+		left: 0.6rem;
+		background: #fff;
+		border: 1px solid #e4ddd4;
+		border-radius: 8px;
+		box-shadow: 0 6px 20px rgba(61,46,31,0.12);
+		z-index: 50;
+		min-width: 120px;
+		overflow: hidden;
+	}
+	.pair-option {
+		padding: 0.5rem 0.85rem;
+		font-size: 0.78rem;
+		font-weight: 500;
+		color: #3d2e1f;
+		cursor: pointer;
+		transition: background 0.1s;
+	}
+	.pair-option:hover { background: #f5f0ea; }
+	.pair-option.active { background: #f0ebe4; font-weight: 600; color: #7a5c2e; }
 	.stat-value { font-family: 'JetBrains Mono', monospace; font-size: 1.45rem; font-weight: 600; color: #3d2e1f; line-height: 1.2; }
 	.stat-value.dim { color: #c4b8aa; }
 	.stat-sub { font-size: 0.75rem; color: #8c7a68; }
@@ -343,16 +471,17 @@
 	.dot.sell { background: #b5412a; }
 	.dot.hold { background: #8c7a68; }
 
-	.holdings-grid { display: flex; gap: 1.5rem; margin-top: 0.5rem; }
-	.holding { display: flex; flex-direction: column; gap: 0.15rem; }
-	.holding-asset { font-size: 0.72rem; font-weight: 600; color: #8c7a68; text-transform: uppercase; }
-	.holding-value { font-size: 1rem; color: #3d2e1f; }
-	.holding-usd  { font-size: 0.72rem; color: #8c7a68; }
+	.holdings-table-wrap { margin-top: 0.5rem; }
+	.holdings-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+	.holdings-table th { text-align: left; color: #8c7a68; font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.5rem 0.6rem; border-bottom: 2px solid #e4ddd4; }
+	.holdings-table td { padding: 0.55rem 0.6rem; border-bottom: 1px solid #f0ebe4; color: #3d2e1f; }
+	.holdings-table tr.zero td { color: #c4b8aa; }
+	.holding-asset-cell { font-weight: 600; }
+	.holdings-table tfoot td { font-weight: 600; border-top: 2px solid #e4ddd4; border-bottom: none; padding-top: 0.65rem; color: #3d2e1f; }
 
 	@media (max-width: 700px) {
 		.stats { grid-template-columns: 1fr 1fr; }
 		.oc-grid { grid-template-columns: 1fr 1fr; }
-		.holdings-grid { flex-direction: column; gap: 0.75rem; }
 	}
 	@media (max-width: 420px) {
 		.stats { grid-template-columns: 1fr; }
