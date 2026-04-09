@@ -11,6 +11,9 @@ _PAIR_ALIASES: dict[str, str] = {
     "ETH/USD":  "ETHUSD",
     "XBT/USD":  "XBTUSD",
     "SOL/USD":  "SOLUSD",
+    "XRP/USD":  "XRPUSD",
+    "BNB/USD":  "BNBUSD",
+    "MATIC/USD": "MATICUSD",
     "DOT/USD":  "DOTUSD",
     "ADA/USD":  "ADAUSD",
 }
