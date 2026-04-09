@@ -239,12 +239,18 @@ class TradingAgent(ABC):
 
     def _call_gemini(self, contents: list[types.Content]):
         """Call Gemini with automatic key failover and retry on rate-limit (429)."""
+        return self._call_gemini_with_config(contents, self._gen_config)
+
+    def _call_gemini_with_config(
+        self, contents: list[types.Content], config: types.GenerateContentConfig
+    ):
+        """Call Gemini with a specific config (e.g. JSON schema follow-up without tools)."""
         for attempt in range(MAX_RETRIES):
             try:
                 return self.gemini_client.models.generate_content(
                     model=self.cfg.gemini.model,
                     contents=contents,
-                    config=self._gen_config,
+                    config=config,
                 )
             except ClientError as e:
                 is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)

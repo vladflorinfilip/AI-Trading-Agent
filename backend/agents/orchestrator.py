@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -15,11 +16,40 @@ from .risk_manager import RiskManager
 log = logging.getLogger(__name__)
 
 _TRADE_TOOL_NAMES = frozenset({"paper_buy", "paper_sell", "buy", "sell"})
-MAX_RECENT_TRADES = 10
+MAX_TRADES_PER_PAIR = 10
 
 
-def _format_trade_summary(trades: list[dict], balance: dict | None) -> str:
-    """Build a concise text block of recent trades + current balance for prompt injection."""
+def _format_age(ts) -> str:
+    """Human-readable age string from a Unix timestamp."""
+    try:
+        delta = time.time() - float(ts)
+        if delta < 3600:
+            return f" ({int(delta / 60)}m ago)"
+        if delta < 86400:
+            return f" ({delta / 3600:.1f}h ago)"
+        return f" ({delta / 86400:.1f}d ago)"
+    except (ValueError, TypeError):
+        return ""
+
+
+def _format_trade_line(t: dict) -> str:
+    side = (t.get("type") or t.get("side") or "?").upper()
+    vol = t.get("vol") or t.get("volume") or "?"
+    price = t.get("price", "?")
+    cost = t.get("cost", "?")
+    age = _format_age(t.get("time"))
+    return f"  {side} vol={vol} @ ${price} cost=${cost}{age}"
+
+
+def _pair_matches(trade_pair: str, target_pair: str) -> bool:
+    """Fuzzy match a trade's pair field against a target pair name."""
+    tp = trade_pair.upper().replace("/", "")
+    tgt = target_pair.upper().replace("/", "")
+    return tp == tgt or tp in tgt or tgt in tp
+
+
+def _format_trade_summary(trades: list[dict], balance: dict | None, pairs: list[str]) -> str:
+    """Build a portfolio summary grouped by asset with per-pair trade history."""
     lines: list[str] = []
 
     if balance:
@@ -34,48 +64,94 @@ def _format_trade_summary(trades: list[dict], balance: dict | None) -> str:
         if parts:
             lines.append(f"Current balance: {', '.join(parts)}")
 
-    if not trades:
-        lines.append("Recent trades: none yet.")
-        return "\n".join(lines)
-
-    lines.append(f"Recent trades (last {len(trades)}):")
+    by_pair: dict[str, list[dict]] = {p: [] for p in pairs}
+    unmatched: list[dict] = []
     for t in trades:
-        side = (t.get("type") or t.get("side") or "?").upper()
-        pair = t.get("pair", "?")
-        vol = t.get("vol") or t.get("volume") or "?"
-        price = t.get("price", "?")
-        cost = t.get("cost", "?")
-        ts = t.get("time")
-        age = ""
-        if ts:
-            try:
-                delta = time.time() - float(ts)
-                if delta < 3600:
-                    age = f" ({int(delta / 60)}m ago)"
-                elif delta < 86400:
-                    age = f" ({delta / 3600:.1f}h ago)"
-                else:
-                    age = f" ({delta / 86400:.1f}d ago)"
-            except (ValueError, TypeError):
-                pass
-        lines.append(f"  {side} {pair} vol={vol} @ ${price} cost=${cost}{age}")
+        trade_pair = t.get("pair", "?")
+        matched = False
+        for p in pairs:
+            if _pair_matches(trade_pair, p):
+                if len(by_pair[p]) < MAX_TRADES_PER_PAIR:
+                    by_pair[p].append(t)
+                matched = True
+                break
+        if not matched:
+            unmatched.append(t)
+
+    for pair in pairs:
+        pair_trades = by_pair[pair]
+        if not pair_trades:
+            lines.append(f"\n{pair}: no recent trades")
+        else:
+            lines.append(f"\n{pair} — last {len(pair_trades)} trades:")
+            for t in pair_trades:
+                lines.append(_format_trade_line(t))
 
     return "\n".join(lines)
 
 
-def _extract_decision(trader_response: str) -> str:
-    """Pull BUY/SELL/HOLD from the trader's response text."""
+def _parse_usd(raw: str | None) -> float:
+    if not raw:
+        return 0.0
+    try:
+        return float(str(raw).replace("$", "").replace(",", ""))
+    except ValueError:
+        return 0.0
+
+
+def _extract_decisions(trader_response: str) -> list[dict]:
+    """Parse per-pair decisions from JSON or legacy DECISIONS: lines."""
+    text = (trader_response or "").strip()
+    if text.startswith("{") or text.startswith("```"):
+        try:
+            if text.startswith("```"):
+                text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+                text = re.sub(r"\s*```\s*$", "", text)
+            data = json.loads(text)
+            decs = data.get("decisions", [])
+            return [
+                {
+                    "pair": d.get("pair", ""),
+                    "action": str(d.get("action", "HOLD")).upper(),
+                    "amount_usd": float(d.get("amount_usd", 0)),
+                    "max_slippage_bps": int(d.get("max_slippage_bps", 50)),
+                    "rationale": d.get("rationale", ""),
+                }
+                for d in decs
+                if isinstance(d, dict)
+            ]
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError):
+            pass
+
+    results: list[dict] = []
+    pattern = re.compile(
+        r"([A-Z]{3,10}USD)\s*:\s*(BUY|SELL|HOLD)\s*(\$[\d,.]+)?",
+        re.IGNORECASE,
+    )
+    for m in pattern.finditer(trader_response):
+        results.append(
+            {
+                "pair": m.group(1).upper(),
+                "action": m.group(2).upper(),
+                "amount_usd": _parse_usd(m.group(3)),
+                "max_slippage_bps": 50,
+                "rationale": "",
+            }
+        )
+    if results:
+        return results
+
     upper = trader_response.upper()
     tag = re.search(r"DECISION[:\-\s]+(BUY|SELL|HOLD)", upper)
     if tag:
-        return tag.group(1)
+        return [{"pair": "", "action": tag.group(1), "amount_usd": 0.0, "max_slippage_bps": 50, "rationale": ""}]
     first_buy = upper.find("BUY")
     first_sell = upper.find("SELL")
     if first_buy >= 0 and (first_sell < 0 or first_buy < first_sell):
-        return "BUY"
+        return [{"pair": "", "action": "BUY", "amount_usd": 0.0, "max_slippage_bps": 50, "rationale": ""}]
     if first_sell >= 0:
-        return "SELL"
-    return "HOLD"
+        return [{"pair": "", "action": "SELL", "amount_usd": 0.0, "max_slippage_bps": 50, "rationale": ""}]
+    return [{"pair": "", "action": "HOLD", "amount_usd": 0.0, "max_slippage_bps": 50, "rationale": ""}]
 
 
 def _extract_price(ticker: dict) -> float | None:
@@ -90,15 +166,39 @@ def _extract_price(ticker: dict) -> float | None:
     return None
 
 
-def _parse_risk_decision(risk_response: str) -> tuple[str, float | None]:
-    """Parse RISK-APPROVE / RISK-RESIZE <amt> / RISK-VETO from the risk manager."""
+def _parse_risk_decisions(risk_response: str) -> dict[str, tuple[str, float | None]]:
+    """Parse per-pair risk verdicts from the risk manager's response.
+
+    Returns a dict mapping pair -> (verdict, resize_amount).
+    Verdict is one of: "APPROVE", "RESIZE", "VETO".
+    """
+    results: dict[str, tuple[str, float | None]] = {}
+    pattern = re.compile(
+        r"([A-Z]{3,10}USD)\s*:\s*RISK[:\-\s]*(APPROVE|VETO|RESIZE)\s*(\$?[\d,.]+)?",
+        re.IGNORECASE,
+    )
+    for m in pattern.finditer(risk_response):
+        pair = m.group(1).upper()
+        verdict = m.group(2).upper()
+        amt: float | None = None
+        if verdict == "RESIZE" and m.group(3):
+            try:
+                amt = float(m.group(3).replace("$", "").replace(",", ""))
+            except ValueError:
+                pass
+        results[pair] = (verdict, amt)
+
+    if results:
+        return results
+
+    # Fallback: parse a blanket verdict and apply to all pairs
     upper = risk_response.upper()
     resize = re.search(r"RISK[:\-\s]*RESIZE\s+\$?([\d]+\.?\d*)", upper)
     if resize:
-        return "RESIZE", float(resize.group(1))
+        return {"__ALL__": ("RESIZE", float(resize.group(1)))}
     if "RISK-VETO" in upper or "RISK VETO" in upper:
-        return "VETO", None
-    return "APPROVE", None
+        return {"__ALL__": ("VETO", None)}
+    return {"__ALL__": ("APPROVE", None)}
 
 
 class Orchestrator:
@@ -113,7 +213,7 @@ class Orchestrator:
         self.store = store
 
     def _fetch_portfolio_context(self) -> str:
-        """Pre-fetch balance + recent trades, filter to last N, return formatted text."""
+        """Pre-fetch balance + recent trades grouped by pair, return formatted text."""
         balance = None
         trades: list[dict] = []
         try:
@@ -130,99 +230,149 @@ class Orchestrator:
                 trades = list(trades.values())
             trades = [t for t in trades if isinstance(t, dict)]
             trades.sort(key=lambda t: float(t.get("time", 0)), reverse=True)
-            trades = trades[:MAX_RECENT_TRADES]
         except Exception as e:
             log.warning("[Orchestrator] failed to pre-fetch history: %s", e)
 
-        return _format_trade_summary(trades, balance)
+        return _format_trade_summary(trades, balance, self.cfg.trading_pairs)
 
     def run_pipeline(self, query: str) -> dict[str, Any]:
         """Full pipeline with traced output for each stage."""
         pairs = ", ".join(self.cfg.trading_pairs)
 
-        # Pre-fetch portfolio context (balance + last N trades) once
         portfolio_ctx = self._fetch_portfolio_context()
         log.info("[Orchestrator] Portfolio context:\n%s", portfolio_ctx)
 
-        # Stage 1: Market analysis with computed technical indicators
+        # Stage 1: Market analysis
         analysis = self.analyst.run_traced(
-            f"Analyse {pairs}. Call technical_signals for each pair, then provide your verdict."
+            f"Analyse {pairs}. Call technical_signals for each pair, then provide "
+            f"your structured report per pair."
         )
 
-        # Stage 2: Trader proposes a trade based on analysis + portfolio context
+        # Stage 2: Trader proposes per-pair decisions
         trade = self.trader.run_traced(
             f"## Your Current Portfolio\n{portfolio_ctx}\n\n"
             f"## Market Analysis\n{analysis['response']}\n\n"
-            f"Based on this portfolio state and market analysis, decide whether to trade."
+            f"Based on this portfolio state and market analysis, propose one trade "
+            f"decision per configured pair. The pipeline will ask you for structured JSON."
         )
 
-        raw_decision = _extract_decision(trade["response"])
-
-        # Stage 3: Structured extraction for reliable decision + amount
-        amount_usd: float | None = None
-        try:
-            structured = self.trader._extract_decision(trade["response"])
-            raw_decision = structured.get("action", raw_decision).upper()
-            amount_usd = float(structured.get("amount_usd", 0))
-            log.info("[Orchestrator] Structured extraction: %s $%.2f", raw_decision, amount_usd or 0)
-        except Exception as e:
-            log.warning("[Orchestrator] Structured extraction failed, using regex: %s", e)
-
-        # Stage 4: Risk manager gates the trade (only for actionable trades)
-        decision = raw_decision
-        if decision in ("BUY", "SELL"):
-            amt_str = f"${amount_usd:.2f}" if amount_usd else "unspecified amount"
-            risk = self.risk_mgr.run_traced(
-                f"## Proposed Trade\n{decision} {amt_str} of {pairs}.\n\n"
-                f"## Portfolio State\n{portfolio_ctx}\n\n"
-                f"## Market Context\n{analysis['response'][:500]}\n\n"
-                f"Review this trade. Respond with RISK-APPROVE, RISK-RESIZE <amount>, or RISK-VETO."
+        raw_decisions = trade.get("parsed_decisions")
+        if raw_decisions:
+            log.info(
+                "[Orchestrator] Using trader structured output: %s",
+                [(d["pair"], d["action"], d.get("amount_usd")) for d in raw_decisions],
             )
-            risk_verdict, resize_amt = _parse_risk_decision(risk["response"])
-            log.info("[Orchestrator] Risk verdict: %s (resize=%s)", risk_verdict, resize_amt)
+        else:
+            raw_decisions = _extract_decisions(trade["response"])
+            try:
+                structured = self.trader._extract_decisions(trade["response"])
+                if structured:
+                    raw_decisions = [
+                        {
+                            "pair": d.get("pair", ""),
+                            "action": d.get("action", "HOLD").upper(),
+                            "amount_usd": float(d.get("amount_usd", 0)),
+                            "max_slippage_bps": int(d.get("max_slippage_bps", 50)),
+                            "rationale": d.get("rationale", ""),
+                        }
+                        for d in structured
+                    ]
+                    log.info(
+                        "[Orchestrator] Fallback extraction: %s",
+                        [(d["pair"], d["action"]) for d in raw_decisions],
+                    )
+            except Exception as e:
+                log.warning("[Orchestrator] Fallback extraction failed: %s", e)
 
-            if risk_verdict == "VETO":
-                decision = "HOLD"
-                trade["response"] += f"\n\n[RISK MANAGER VETO]: {risk['response']}"
-            elif risk_verdict == "RESIZE" and resize_amt is not None:
-                amount_usd = resize_amt
-                trade["response"] += f"\n\n[RISK MANAGER RESIZED to ${resize_amt:.2f}]: {risk['response']}"
+        actionable = [d for d in raw_decisions if d.get("action") in ("BUY", "SELL")]
+        has_trades = len(actionable) > 0
+
+        # Stage 3: Risk manager evaluates each proposed trade individually
+        if has_trades:
+            trade_lines = "\n".join(
+                f"  {d.get('pair', '?')}: {d['action']} ${d.get('amount_usd', '?')}"
+                for d in actionable
+            )
+            risk = self.risk_mgr.run_traced(
+                f"## Proposed Trades\n{trade_lines}\n\n"
+                f"## Portfolio State\n{portfolio_ctx}\n\n"
+                f"## Market Context\n{analysis['response'][:800]}\n\n"
+                f"Review EACH trade individually. Output a RISK DECISIONS block "
+                f"with one verdict per trade (RISK-APPROVE, RISK-RESIZE $amount, or RISK-VETO)."
+            )
+            risk_verdicts = _parse_risk_decisions(risk["response"])
+            log.info("[Orchestrator] Risk verdicts: %s", risk_verdicts)
+
+            # Apply per-pair risk verdicts to decisions
+            for d in raw_decisions:
+                if d.get("action") not in ("BUY", "SELL"):
+                    continue
+                pair = d.get("pair", "").upper()
+                verdict, resize_amt = risk_verdicts.get(
+                    pair, risk_verdicts.get("__ALL__", ("APPROVE", None))
+                )
+                d["risk_verdict"] = verdict
+                if verdict == "VETO":
+                    d["original_action"] = d["action"]
+                    d["action"] = "HOLD"
+                    d["vetoed"] = True
+                    log.info("[Orchestrator] %s %s vetoed by risk manager", d["original_action"], pair)
+                elif verdict == "RESIZE" and resize_amt is not None:
+                    d["original_amount_usd"] = d.get("amount_usd")
+                    d["amount_usd"] = resize_amt
+                    log.info("[Orchestrator] %s %s resized to $%.2f", d["action"], pair, resize_amt)
+
+            trade["response"] += f"\n\n[RISK MANAGER]: {risk['response']}"
         else:
             risk = self.risk_mgr.run_traced(
                 f"## Portfolio State\n{portfolio_ctx}\n\n"
-                f"No trade proposed. Check current portfolio risk. "
+                f"No trades proposed. Check current portfolio risk. "
                 f"Report concentration and any concerns briefly."
             )
 
         stages = [analysis, trade, risk]
-
-        # Extract ATR from analyst tool calls for volatility-adjusted sizing
         atr = self._extract_atr(analysis)
+
+        # Determine the summary decision for backward compatibility
+        actions = [d.get("action", "HOLD") for d in raw_decisions]
+        unique_actions = set(actions) - {"HOLD"}
+        if not unique_actions:
+            summary_decision = "HOLD"
+        elif unique_actions == {"BUY"}:
+            summary_decision = "BUY"
+        elif unique_actions == {"SELL"}:
+            summary_decision = "SELL"
+        else:
+            summary_decision = "MULTI"
 
         result: dict[str, Any] = {
             "stages": stages,
-            "decision": decision,
+            "decision": summary_decision,
+            "decisions": raw_decisions,
             "total_duration_ms": sum(s["duration_ms"] for s in stages),
         }
-        if amount_usd is not None:
-            result["amount_usd"] = amount_usd
         if atr is not None:
             result["atr"] = atr
 
-        if decision in ("BUY", "SELL"):
-            already_executed = any(
-                tc["name"] in _TRADE_TOOL_NAMES
-                for tc in trade.get("tool_calls", [])
-            )
-            if already_executed:
-                log.info("[Orchestrator] trader already executed %s via tool call", decision)
-            else:
-                log.info("[Orchestrator] trader recommended %s but did not call tool — executing", decision)
-                execution = self._execute_trade(trade["response"], decision)
-                result["execution"] = execution
+        # Execute only trades that passed risk review
+        executions: list[dict] = []
+        for d in raw_decisions:
+            if d.get("action") not in ("BUY", "SELL"):
+                continue
+            if d.get("vetoed"):
+                continue
+            pair = d.get("pair", "")
+            amount_usd = float(d.get("amount_usd", 0))
+            if not pair or amount_usd <= 0:
+                continue
+            execution = self._execute_trade_for_pair(pair, d["action"], amount_usd)
+            executions.append(execution)
+
+        if executions:
+            result["executions"] = executions
 
         if self.store:
-            saved = self.store.save_run(query=query, stages=stages, decision=decision)
+            saved = self.store.save_run(query=query, stages=stages, decision=summary_decision)
             result["id"] = saved["id"]
             result["timestamp"] = saved["timestamp"]
             for s in stages:
@@ -231,20 +381,8 @@ class Orchestrator:
 
         return result
 
-    def _execute_trade(self, trader_response: str, decision: str) -> dict:
-        """Use the Trader's structured extraction to get trade params, then execute."""
-        try:
-            details = self.trader._extract_decision(trader_response)
-        except Exception as e:
-            log.warning("[Orchestrator] structured extraction failed: %s", e)
-            return {"action": decision, "error": f"extraction failed: {e}"}
-
-        action = details.get("action", "HOLD").upper()
-        if action == "HOLD":
-            return {"action": "HOLD", "skipped": True}
-
-        pair = details.get("pair", "")
-        amount_usd = float(details.get("amount_usd", 0))
+    def _execute_trade_for_pair(self, pair: str, action: str, amount_usd: float) -> dict:
+        """Execute a single trade for a given pair."""
         if not pair or amount_usd <= 0:
             log.warning("[Orchestrator] invalid trade params: pair=%s amount=%.2f", pair, amount_usd)
             return {"action": action, "pair": pair, "error": "invalid pair or amount"}
@@ -273,8 +411,26 @@ class Orchestrator:
                 "amount_usd": amount_usd, "price": price, "result": trade_result,
             }
         except Exception as e:
-            log.error("[Orchestrator] trade execution failed: %s", e)
+            log.error("[Orchestrator] trade execution for %s failed: %s", pair, e)
             return {"action": action, "pair": pair, "error": str(e)}
+
+    def _execute_trade(self, trader_response: str, decision: str) -> dict:
+        """Legacy wrapper: extract single trade from response and execute."""
+        try:
+            details = self.trader._extract_decision(trader_response)
+        except Exception as e:
+            log.warning("[Orchestrator] structured extraction failed: %s", e)
+            return {"action": decision, "error": f"extraction failed: {e}"}
+
+        action = details.get("action", "HOLD").upper()
+        if action == "HOLD":
+            return {"action": "HOLD", "skipped": True}
+
+        return self._execute_trade_for_pair(
+            details.get("pair", ""),
+            action,
+            float(details.get("amount_usd", 0)),
+        )
     @staticmethod
     def _extract_atr(analysis_stage: dict[str, Any]) -> float | None:
         """Pull ATR value from the analyst's tool call results."""

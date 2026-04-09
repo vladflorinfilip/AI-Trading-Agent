@@ -8,6 +8,7 @@ export function stageIcon(name: string): string {
 export function decisionColor(d: string): string {
 	if (d === 'BUY') return '#10b981';
 	if (d === 'SELL') return '#ef4444';
+	if (d === 'MULTI') return '#8b5cf6';
 	return '#64748b';
 }
 
