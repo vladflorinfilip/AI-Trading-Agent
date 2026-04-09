@@ -328,7 +328,7 @@ def get_performance_metrics():
             "last_run": None,
         }
 
-    decisions: dict[str, int] = {"BUY": 0, "SELL": 0, "HOLD": 0}
+    decisions: dict[str, int] = {"BUY": 0, "SELL": 0, "HOLD": 0, "MULTI": 0}
     total_duration = 0
     error_count = 0
     for r in runs:

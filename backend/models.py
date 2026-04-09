@@ -8,6 +8,7 @@ from typing import Literal
 # Canonical Kraken pair names used on-chain (no slash, Kraken native format).
 _PAIR_ALIASES: dict[str, str] = {
     "BTC/USD":  "XBTUSD",
+    "BTCUSD":   "XBTUSD",
     "ETH/USD":  "ETHUSD",
     "XBT/USD":  "XBTUSD",
     "SOL/USD":  "SOLUSD",
