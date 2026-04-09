@@ -28,7 +28,13 @@ export const api = {
 	ohlc: (pair: string) => get<any>(`/api/ohlc/${pair}`),
 	paperBalance: () => get<any>('/api/paper/balance'),
 	paperPositions: () => get<any>('/api/paper/positions'),
-	paperHistory: () => get<any>('/api/paper/history'),
+	paperHistory: (opts?: { from_ts?: number; to_ts?: number }) => {
+		const p = new URLSearchParams();
+		if (opts?.from_ts != null) p.set('from_ts', String(opts.from_ts));
+		if (opts?.to_ts != null) p.set('to_ts', String(opts.to_ts));
+		const qs = p.toString();
+		return get<any>(`/api/paper/history${qs ? '?' + qs : ''}`);
+	},
 	runAgent: (message: string) => post<any>('/api/agent/run', { message }),
 	runPipeline: (query: string) => post<any>('/api/pipeline/run', { query }),
 	getHistory: (opts?: { limit?: number; from_ts?: number; to_ts?: number }) => {

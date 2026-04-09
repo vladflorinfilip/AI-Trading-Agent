@@ -117,6 +117,8 @@
 	.modal-close:hover { color: #3d2e1f; }
 
 	.modal-body {
+		flex: 1;
+		min-height: 0;
 		overflow-y: auto;
 		padding: 1rem 1.25rem;
 		display: flex;
@@ -127,7 +129,7 @@
 	details {
 		border: 1px solid #ece6de;
 		border-radius: 10px;
-		overflow: hidden;
+		overflow: clip;
 	}
 	summary {
 		display: flex;
@@ -167,6 +169,10 @@
 		margin-bottom: 0.5rem;
 	}
 
+	.tool-calls {
+		max-height: 300px;
+		overflow-y: auto;
+	}
 	.tool-calls h4 {
 		font-size: 0.75rem;
 		color: #8b7a66;

@@ -1,6 +1,8 @@
 <script>
 	import { api } from '$lib/api';
 	import { onMount } from 'svelte';
+	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
 	import { decisionColor, formatDateTime, stageIcon, fmt$, timeAgo } from '$lib/utils';
 	import RunModal from '$lib/components/RunModal.svelte';
 
@@ -10,16 +12,43 @@
 	let error = '';
 	let loading = false;
 
-	// Time filter: '1h' | '6h' | '24h' | '7d' | 'custom'
 	let timeFilter = '1h';
-
-	// Custom date range
 	let customFrom = '';
 	let customTo = '';
 
-	// Modal state
 	let selectedRun = null;
 	let modalOpen = false;
+
+	const PRESETS = ['1h', '6h', '24h', '7d'];
+
+	function initFromUrl() {
+		const params = $page.url.searchParams;
+		const d = params.get('duration');
+		if (!d) return;
+		if (PRESETS.includes(d)) {
+			timeFilter = d;
+		} else if (d.includes('-', 3)) {
+			timeFilter = 'custom';
+			const parts = d.split('_');
+			if (parts.length === 2) {
+				customFrom = parts[0];
+				customTo = parts[1];
+			}
+		}
+	}
+
+	function syncUrl() {
+		const params = new URLSearchParams($page.url.searchParams);
+		if (timeFilter === 'custom' && (customFrom || customTo)) {
+			params.set('duration', `${customFrom}_${customTo}`);
+		} else {
+			params.set('duration', timeFilter);
+		}
+		const target = `${$page.url.pathname}?${params}`;
+		if (target !== `${$page.url.pathname}?${$page.url.searchParams}`) {
+			goto(target, { replaceState: true, keepFocus: true, noScroll: true });
+		}
+	}
 
 	function getTimeRange() {
 		const now = Date.now() / 1000;
@@ -47,7 +76,7 @@
 			const range = getTimeRange();
 			const [ph, th] = await Promise.all([
 				api.getHistory(range),
-				api.paperHistory()
+				api.paperHistory(range)
 			]);
 			pipelineHistory = ph;
 			tradeHistory = Array.isArray(th) ? th : [];
@@ -58,20 +87,12 @@
 		}
 	}
 
-	onMount(refresh);
+	onMount(() => {
+		initFromUrl();
+		refresh();
+	});
 
-	$: timeFilter, customFrom, customTo, refresh();
-
-	// Filter trades client-side to match the selected time window
-	$: filteredTrades = (() => {
-		const range = getTimeRange();
-		return tradeHistory.filter(t => {
-			const ts = t.time || 0;
-			if (range.from_ts && ts < range.from_ts) return false;
-			if (range.to_ts && ts > range.to_ts) return false;
-			return true;
-		});
-	})();
+	$: timeFilter, customFrom, customTo, (() => { syncUrl(); refresh(); })();
 
 	function openRunModal(run) {
 		selectedRun = run;
@@ -156,7 +177,7 @@
 
 	<!-- Trades tab -->
 	{#if tab === 'trades'}
-		{#if filteredTrades.length > 0}
+		{#if tradeHistory.length > 0}
 			<div class="card scrollable">
 				<table>
 					<thead>
@@ -170,9 +191,9 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each filteredTrades as trade}
+						{#each tradeHistory as trade}
 							<tr>
-								<td class="mono">{trade.time ? timeAgo(parseFloat(trade.time)) : '--'}</td>
+								<td class="mono">{trade.time ? timeAgo(trade.time) : '--'}</td>
 								<td><span class="decision-badge sm" style="background:{decisionColor((trade.type || trade.side || '').toUpperCase())}">{trade.type || trade.side || '?'}</span></td>
 								<td>{trade.pair || '--'}</td>
 								<td class="mono">{parseFloat(trade.vol || trade.volume || 0).toFixed(6)}</td>

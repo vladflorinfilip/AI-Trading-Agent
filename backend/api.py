@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -97,8 +97,24 @@ def get_paper_status():
     return _kraken_call(kraken.paper_status)
 
 
+def _parse_trade_time(t: dict) -> float:
+    """Best-effort extraction of a trade's timestamp as Unix seconds."""
+    raw = t.get("time", t.get("timestamp", 0))
+    if isinstance(raw, (int, float)):
+        return float(raw) / 1000 if raw > 1e12 else float(raw)
+    if isinstance(raw, str):
+        try:
+            return float(raw) if raw.replace(".", "", 1).isdigit() else datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            pass
+    return 0.0
+
+
 @app.get("/api/paper/history")
-def get_paper_history():
+def get_paper_history(
+    from_ts: float | None = Query(None),
+    to_ts: float | None = Query(None),
+):
     data = _kraken_call(kraken.paper_history)
     if isinstance(data, dict):
         trades = data.get("trades", data.get("history", data.get("orders", [])))
@@ -108,6 +124,17 @@ def get_paper_history():
         trades = list(trades.values())
     if not isinstance(trades, list):
         trades = []
+    if from_ts is not None or to_ts is not None:
+        filtered = []
+        for t in trades:
+            ts = _parse_trade_time(t)
+            if from_ts is not None and ts < from_ts:
+                continue
+            if to_ts is not None and ts > to_ts:
+                continue
+            filtered.append(t)
+        trades = filtered
+    trades.sort(key=_parse_trade_time, reverse=True)
     return trades
 
 
