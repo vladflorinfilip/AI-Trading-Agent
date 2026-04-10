@@ -42,8 +42,12 @@ _SINGLE_DECISION_SCHEMA = types.Schema(
             type="STRING",
             description="One sentence explaining why this decision was made.",
         ),
+        "confidence": types.Schema(
+            type="NUMBER",
+            description="Confidence in this pair decision from 0.0 to 1.0",
+        ),
     },
-    required=["pair", "action", "amount_usd", "max_slippage_bps", "rationale"],
+    required=["pair", "action", "amount_usd", "max_slippage_bps", "rationale", "confidence"],
 )
 
 _TRADE_DECISIONS_SCHEMA = types.Schema(
@@ -72,8 +76,9 @@ TRADER_DECISIONS_JSON_SCHEMA: dict[str, Any] = {
                     "amount_usd": {"type": "number"},
                     "max_slippage_bps": {"type": "integer"},
                     "rationale": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 },
-                "required": ["pair", "action", "amount_usd", "max_slippage_bps", "rationale"],
+                "required": ["pair", "action", "amount_usd", "max_slippage_bps", "rationale", "confidence"],
             },
         }
     },
@@ -88,7 +93,7 @@ After you finish any market data tool calls, you will be asked for a single JSON
 only. That object must have a top-level key "decisions" whose value is an array with
 exactly one object per configured trading pair. Each element must include:
 pair (Kraken style, e.g. XBTUSD), action (BUY, SELL, or HOLD), amount_usd (0 for HOLD),
-max_slippage_bps (integer), rationale (short string).
+max_slippage_bps (integer), rationale (short string), confidence (0..1).
 """
 
 
@@ -122,7 +127,7 @@ class Trader(TradingAgent):
             f'Root shape: {{"decisions": [...]}}. Include exactly one object per pair, '
             f"using these canonical pair strings: {canon}. "
             "Each object: pair, action (BUY|SELL|HOLD), amount_usd (number, 0 if HOLD), "
-            "max_slippage_bps (integer), rationale (string)."
+            "max_slippage_bps (integer), rationale (string), confidence (number 0..1)."
         )
 
     @staticmethod
@@ -147,12 +152,18 @@ class Trader(TradingAgent):
             bps = int(row.get("max_slippage_bps", self.cfg.identity.default_max_slippage_bps))
         except (TypeError, ValueError):
             bps = self.cfg.identity.default_max_slippage_bps
+        try:
+            confidence = float(row.get("confidence", 0.0 if action == "HOLD" else 0.5))
+        except (TypeError, ValueError):
+            confidence = 0.0 if action == "HOLD" else 0.5
+        confidence = max(0.0, min(confidence, 1.0))
         return {
             "pair": canonical_pair,
             "action": action,
             "amount_usd": amount,
             "max_slippage_bps": bps,
             "rationale": str(row.get("rationale", "")).strip() or "(no rationale)",
+            "confidence": confidence,
         }
 
     def _merge_required_pairs(self, decisions: list[dict]) -> list[dict[str, Any]]:
@@ -174,6 +185,7 @@ class Trader(TradingAgent):
                         "amount_usd": 0.0,
                         "max_slippage_bps": self.cfg.identity.default_max_slippage_bps,
                         "rationale": "Pair missing from model output; defaulted to HOLD",
+                        "confidence": 0.0,
                     }
                 )
         return out
