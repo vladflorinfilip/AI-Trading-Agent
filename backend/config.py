@@ -81,6 +81,7 @@ class AgentConfig:
     mistral: MistralConfig = field(default_factory=MistralConfig)
     identity: AgentIdentityConfig = field(default_factory=AgentIdentityConfig)
     max_agent_iterations: int = field(default_factory=lambda: int(_get("agent", "max_iterations", default=20)))
+    min_trade_usd: float = field(default_factory=lambda: float(_get("agent", "min_trade_usd", default=50.0)))
     log_level: str = field(default_factory=lambda: _get("agent", "log_level", default="INFO"))
     trading_pairs: list[str] = field(default_factory=lambda: _get("trading", "pairs", default=["BTC/USD", "ETH/USD"]))
 

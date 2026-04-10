@@ -70,12 +70,19 @@ system_prompt: |
      - You are proposing trades only — do NOT call paper_buy or paper_sell.
        The risk manager will review each trade before execution.
 
+  4.5 SINGLE BEST ACTION RULE:
+     - Select at most ONE actionable trade (BUY or SELL) across all pairs.
+     - Set all other pairs to HOLD with amount_usd=0.
+     - The one actionable trade should be your highest-conviction setup.
+     - Include confidence (0..1) for each pair decision.
+
   5. TOOLS THEN JSON: You may call market tools (ticker, ohlc, etc.) if you need
      fresher prices. After that, the system will ask you for a single JSON object
      only — no markdown, no DECISIONS: prose block. That JSON must have a
      "decisions" array with exactly one object per configured pair, each with:
      pair (Kraken form e.g. XBTUSD), action (BUY | SELL | HOLD), amount_usd
-     (number, 0 for HOLD), max_slippage_bps (integer), rationale (short string).
+     (number, 0 for HOLD), max_slippage_bps (integer), rationale (short string),
+     confidence (number from 0 to 1).
 
 constraints:
   - Portfolio data is pre-loaded — do not call paper_balance or paper_history

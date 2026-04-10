@@ -163,6 +163,33 @@ def _extract_price(ticker: dict) -> float | None:
     return None
 
 
+def _extract_total_balance(entry: Any) -> float:
+    if isinstance(entry, (int, float)):
+        return float(entry)
+    if isinstance(entry, dict):
+        try:
+            return float(entry.get("total", 0))
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def _candidate_asset_symbols(pair: str) -> list[str]:
+    base = pair.upper().replace("/", "")
+    if base.endswith("USD"):
+        base = base[:-3]
+    out = [base]
+    if base == "BTC":
+        out.append("XBT")
+    elif base == "XBT":
+        out.append("BTC")
+    elif base == "POL":
+        out.append("MATIC")
+    elif base == "MATIC":
+        out.append("POL")
+    return out
+
+
 def _parse_risk_decisions(risk_response: str) -> dict[str, tuple[str, float | None]]:
     """Parse per-pair risk verdicts from the risk manager's response.
 
@@ -274,6 +301,32 @@ class Orchestrator:
         actionable = [d for d in raw_decisions if d.get("action") in ("BUY", "SELL")]
         has_trades = len(actionable) > 0
 
+        # Keep only one high-confidence actionable decision to improve intent quality.
+        if has_trades:
+            ranked = sorted(
+                actionable,
+                key=lambda d: (
+                    float(d.get("confidence", 0.0)),
+                    float(d.get("amount_usd", 0.0)),
+                ),
+                reverse=True,
+            )
+            best = ranked[0]
+            best_key = (best.get("pair", ""), best.get("action", ""))
+            for d in raw_decisions:
+                key = (d.get("pair", ""), d.get("action", ""))
+                if d.get("action") in ("BUY", "SELL") and key != best_key:
+                    d["dropped_by_selector"] = True
+                    d["original_action"] = d["action"]
+                    d["action"] = "HOLD"
+                    d["amount_usd"] = 0.0
+                    d["rationale"] = (
+                        f"{d.get('rationale', '')} "
+                        "[downgraded to HOLD: lower confidence than top trade]"
+                    ).strip()
+            actionable = [d for d in raw_decisions if d.get("action") in ("BUY", "SELL")]
+            has_trades = len(actionable) > 0
+
         # Stage 3: Risk manager evaluates each proposed trade individually
         if has_trades:
             trade_lines = "\n".join(
@@ -370,6 +423,13 @@ class Orchestrator:
         if not pair or amount_usd <= 0:
             return {"action": action, "pair": pair, "error": "invalid pair or amount"}
 
+        if amount_usd < self.cfg.min_trade_usd:
+            return {
+                "action": action,
+                "pair": pair,
+                "error": f"amount ${amount_usd:.2f} below min_trade_usd ${self.cfg.min_trade_usd:.2f}",
+            }
+
         try:
             ticker_data = self.trader.kraken.ticker(pair)
             price = _extract_price(ticker_data)
@@ -381,6 +441,37 @@ class Orchestrator:
                 volume_str = f"{volume:.5f}"
             else:
                 volume_str = f"{volume:.3f}"
+
+            # Pre-execution guard: ensure balance/position can support the intent.
+            try:
+                bal_raw = self.trader.kraken.paper_balance()
+                balances = bal_raw.get("balances", bal_raw) if isinstance(bal_raw, dict) else {}
+            except Exception:
+                balances = {}
+
+            usd_available = _extract_total_balance(
+                (balances or {}).get("USD") or (balances or {}).get("ZUSD")
+            )
+            if action == "BUY" and usd_available + 1e-9 < amount_usd:
+                return {
+                    "action": action,
+                    "pair": pair,
+                    "error": f"insufficient USD balance (${usd_available:.2f}) for ${amount_usd:.2f} buy",
+                }
+
+            if action == "SELL":
+                sell_available = 0.0
+                for sym in _candidate_asset_symbols(pair):
+                    sell_available = max(sell_available, _extract_total_balance((balances or {}).get(sym)))
+                if sell_available + 1e-9 < volume:
+                    return {
+                        "action": action,
+                        "pair": pair,
+                        "error": (
+                            f"insufficient {pair} base balance ({sell_available:.8f}) "
+                            f"for volume {volume:.8f}"
+                        ),
+                    }
 
             if action == "BUY":
                 trade_result = self.trader.kraken.paper_buy(pair=pair, volume=volume_str)
