@@ -46,9 +46,10 @@ export class PythonApiStrategy implements TradingStrategy {
       const json = (await res.json()) as PipelineResponse;
 
       const action = this.parseAction(json.decision);
-      const traderStage = json.stages?.[1];
-      const reasoning =
-        traderStage?.response ?? json.decision ?? "No reasoning returned";
+      const reasoning = this.buildCheckpointReasoning(
+        json.stages,
+        json.decision
+      );
 
       const pipelineAmount = json.amount_usd;
       const atrSized = json.atr
@@ -71,6 +72,60 @@ export class PythonApiStrategy implements TradingStrategy {
       console.warn(`[python-api] Failed to reach Python backend: ${msg}`);
       return this.fallbackHold(data, `API unreachable: ${msg}`);
     }
+  }
+
+  /**
+   * Full reasoning for EIP-712 / off-chain checkpoints: all three pipeline stages
+   * so validators see analyst, trader, and risk distinctly. The orchestrator
+   * appends `[RISK MANAGER]: ...` to the trader response when trades are proposed;
+   * we strip that suffix and emit risk only under the Risk Manager section.
+   * The orchestrator summary (`decision`) is prepended under `## Pipeline decision`
+   * using the same string the API returned (trim only), so audit trails match the
+   * backend JSON. EIP-712 / `verifyReasoningIntegrity` only check
+   * keccak256(utf8(reasoning)) === reasoningHash — they do not parse headings or
+   * require a fixed prose shape; the signed `action` field remains the template’s
+   * TradeDecision (e.g. MULTI may map to HOLD in `parseAction`).
+   */
+  private buildCheckpointReasoning(
+    stages: PipelineResponse["stages"] | undefined,
+    summaryDecision: string | undefined
+  ): string {
+    const decisionLine = summaryDecision?.trim() || "UNKNOWN";
+    const preamble = `## Pipeline decision\n\n${decisionLine}`;
+
+    if (!stages?.length) {
+      return preamble;
+    }
+
+    const riskText = stages[2]?.response?.trim() ?? "";
+    const traderRaw = stages[1]?.response ?? "";
+    const embeddedSuffix =
+      riskText.length > 0
+        ? `\n\n[RISK MANAGER]: ${riskText}`
+        : "";
+    const traderBody =
+      embeddedSuffix && traderRaw.endsWith(embeddedSuffix)
+        ? traderRaw.slice(0, -embeddedSuffix.length)
+        : traderRaw;
+
+    const sections: string[] = [];
+    const heading = (i: number) =>
+      stages[i]?.agent ??
+      (i === 0 ? "Market Analyst" : i === 1 ? "Trader" : "Risk Manager");
+
+    const pushIf = (i: number, body: string) => {
+      const t = body.trim();
+      if (t) sections.push(`## ${heading(i)}\n\n${t}`);
+    };
+
+    pushIf(0, stages[0]?.response ?? "");
+    pushIf(1, traderBody);
+    pushIf(2, riskText);
+
+    if (sections.length === 0) {
+      return preamble;
+    }
+    return `${preamble}\n\n${sections.join("\n\n")}`;
   }
 
   private parseAction(raw: string | undefined): TradeDecision["action"] {
