@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 import time
 from typing import Any
@@ -12,8 +11,6 @@ from ..store import RunStore
 from .market_analyst import MarketAnalyst
 from .trader import Trader
 from .risk_manager import RiskManager
-
-log = logging.getLogger(__name__)
 
 _TRADE_TOOL_NAMES = frozenset({"paper_buy", "paper_sell", "buy", "sell"})
 MAX_TRADES_PER_PAIR = 10
@@ -218,8 +215,8 @@ class Orchestrator:
         trades: list[dict] = []
         try:
             balance = self.kraken.paper_balance()
-        except Exception as e:
-            log.warning("[Orchestrator] failed to pre-fetch balance: %s", e)
+        except Exception:
+            pass
         try:
             raw = self.kraken.paper_history()
             if isinstance(raw, dict):
@@ -230,8 +227,8 @@ class Orchestrator:
                 trades = list(trades.values())
             trades = [t for t in trades if isinstance(t, dict)]
             trades.sort(key=lambda t: float(t.get("time", 0)), reverse=True)
-        except Exception as e:
-            log.warning("[Orchestrator] failed to pre-fetch history: %s", e)
+        except Exception:
+            pass
 
         return _format_trade_summary(trades, balance, self.cfg.trading_pairs)
 
@@ -240,7 +237,6 @@ class Orchestrator:
         pairs = ", ".join(self.cfg.trading_pairs)
 
         portfolio_ctx = self._fetch_portfolio_context()
-        log.info("[Orchestrator] Portfolio context:\n%s", portfolio_ctx)
 
         # Stage 1: Market analysis
         analysis = self.analyst.run_traced(
@@ -257,12 +253,7 @@ class Orchestrator:
         )
 
         raw_decisions = trade.get("parsed_decisions")
-        if raw_decisions:
-            log.info(
-                "[Orchestrator] Using trader structured output: %s",
-                [(d["pair"], d["action"], d.get("amount_usd")) for d in raw_decisions],
-            )
-        else:
+        if not raw_decisions:
             raw_decisions = _extract_decisions(trade["response"])
             try:
                 structured = self.trader._extract_decisions(trade["response"])
@@ -277,12 +268,8 @@ class Orchestrator:
                         }
                         for d in structured
                     ]
-                    log.info(
-                        "[Orchestrator] Fallback extraction: %s",
-                        [(d["pair"], d["action"]) for d in raw_decisions],
-                    )
-            except Exception as e:
-                log.warning("[Orchestrator] Fallback extraction failed: %s", e)
+            except Exception:
+                pass
 
         actionable = [d for d in raw_decisions if d.get("action") in ("BUY", "SELL")]
         has_trades = len(actionable) > 0
@@ -301,7 +288,6 @@ class Orchestrator:
                 f"with one verdict per trade (RISK-APPROVE, RISK-RESIZE $amount, or RISK-VETO)."
             )
             risk_verdicts = _parse_risk_decisions(risk["response"])
-            log.info("[Orchestrator] Risk verdicts: %s", risk_verdicts)
 
             # Apply per-pair risk verdicts to decisions
             for d in raw_decisions:
@@ -316,11 +302,9 @@ class Orchestrator:
                     d["original_action"] = d["action"]
                     d["action"] = "HOLD"
                     d["vetoed"] = True
-                    log.info("[Orchestrator] %s %s vetoed by risk manager", d["original_action"], pair)
                 elif verdict == "RESIZE" and resize_amt is not None:
                     d["original_amount_usd"] = d.get("amount_usd")
                     d["amount_usd"] = resize_amt
-                    log.info("[Orchestrator] %s %s resized to $%.2f", d["action"], pair, resize_amt)
 
             trade["response"] += f"\n\n[RISK MANAGER]: {risk['response']}"
         else:
@@ -384,7 +368,6 @@ class Orchestrator:
     def _execute_trade_for_pair(self, pair: str, action: str, amount_usd: float) -> dict:
         """Execute a single trade for a given pair."""
         if not pair or amount_usd <= 0:
-            log.warning("[Orchestrator] invalid trade params: pair=%s amount=%.2f", pair, amount_usd)
             return {"action": action, "pair": pair, "error": "invalid pair or amount"}
 
         try:
@@ -404,14 +387,11 @@ class Orchestrator:
             else:
                 trade_result = self.trader.kraken.paper_sell(pair=pair, volume=volume_str)
 
-            log.info("[Orchestrator] paper %s %s %s @ $%.2f → %s",
-                     action, volume_str, pair, price, trade_result)
             return {
                 "action": action, "pair": pair, "volume": volume_str,
                 "amount_usd": amount_usd, "price": price, "result": trade_result,
             }
         except Exception as e:
-            log.error("[Orchestrator] trade execution for %s failed: %s", pair, e)
             return {"action": action, "pair": pair, "error": str(e)}
 
     def _execute_trade(self, trader_response: str, decision: str) -> dict:
@@ -419,7 +399,6 @@ class Orchestrator:
         try:
             details = self.trader._extract_decision(trader_response)
         except Exception as e:
-            log.warning("[Orchestrator] structured extraction failed: %s", e)
             return {"action": decision, "error": f"extraction failed: {e}"}
 
         action = details.get("action", "HOLD").upper()
