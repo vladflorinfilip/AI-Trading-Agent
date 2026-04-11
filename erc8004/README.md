@@ -1,150 +1,104 @@
-# AI Trading Agent Template
+# ERC-8004 on-chain agent (`erc8004/`)
 
-A complete, reusable AI trading agent with:
-- **On-chain identity** via ERC-8004 Agent Registry (Sepolia)
-- **Trade execution** via Kraken REST API (paper trading supported)
-- **Capital management** via Hackathon Vault + Risk Router contracts
-- **Cryptographic explainability** via EIP-712 signed checkpoints
+This folder is the **on-chain trading loop** for the parent [AI-Trading-Agent](../README.md) repo: ERC-8004 identity, EIP-712 checkpoints, Risk Router validation, and **Kraken execution via the [Kraken CLI](https://github.com/kraken-oss/kraken-cli)** (paper mode supported through env — see `.env.example`).
 
-Any team can pick this up, swap in their own model or strategy, and run it — the identity, risk, and audit layers stay the same.
+The default strategy is **`PythonApiStrategy`**, which calls the root Python backend at `POST /api/pipeline/run` so each tick runs **Market Analyst → Trader → Risk Manager** before the template signs intents and interacts with Sepolia contracts.
+
+The tutorial markdown under `tutorial/` and much of the Hardhat layout come from the [AI Trading Agent Template](https://github.com/Stephen-Kimoi/ai-trading-agent-template) (MIT), adapted for this monorepo and the Python pipeline.
 
 ---
 
 ## Architecture
 
 ```
-Your Strategy (TradingStrategy interface)
+PythonApiStrategy  →  POST /api/pipeline/run  (repo root backend)
        ↓
-  [On-chain] RiskRouter.validateTrade()
+  TradingStrategy.analyze(market)  →  TradeDecision
        ↓
-  [Exchange] Kraken.placeOrder()
+  RiskRouter.validateTrade()  (on-chain)
        ↓
-  [Explainability] formatExplanation() + generateCheckpoint()
+  Kraken CLI  (orders + market data)
        ↓
-  checkpoints.jsonl  (signed audit log)
+  EIP-712 checkpoint  →  checkpoints.jsonl  (+ optional ValidationRegistry attestation)
 ```
 
 ---
 
 ## Prerequisites
 
-- Node.js 20+
-- Sepolia ETH ([sepoliafaucet.com](https://sepoliafaucet.com))
-- Infura or Alchemy Sepolia RPC URL
-- Kraken Pro account with API keys (see below)
+- **Node.js 20+** (ethers v6 / toolchain)
+- Sepolia ETH (e.g. [sepoliafaucet.com](https://sepoliafaucet.com))
+- Infura, Alchemy, or another **Sepolia RPC URL**
+- Kraken API key with permissions suitable for the CLI (see `.env.example` comments)
 
 ---
 
-## Setup
+## Setup (inside this monorepo)
+
+From the **repository root**:
 
 ```bash
-git clone <this-repo>
-cd ai-trading-agent-tutorial
+cd erc8004
 npm install
 cp .env.example .env
-# Fill in SEPOLIA_RPC_URL, PRIVATE_KEY, KRAKEN_API_KEY, KRAKEN_API_SECRET
+# Edit .env: SEPOLIA_RPC_URL, PRIVATE_KEY / AGENT_WALLET_PRIVATE_KEY,
+# KRAKEN_*, contract addresses, AGENT_ID, TRADING_PAIR, etc.
 ```
 
-### Kraken API key
+### Python backend URL
 
-Use **Kraken Pro** (kraken.com → Go to Kraken Pro). Go to **Settings → API** and create a key with these permissions only:
+If the FastAPI app is not on `http://localhost:8000`, set:
 
-- **Funds:** Query
-- **Orders and trades:** Query open orders & trades, Create & modify orders, Cancel & close orders
+```bash
+export PYTHON_API_URL=https://your-api.example.com
+```
+
+This is read by `src/agent/python-api-strategy.ts` and `src/agent/index.ts`.
 
 ---
 
-## Quickstart
+## Quickstart (own contracts)
 
 ### 1. Deploy contracts
 
 ```bash
+cd erc8004
 npx hardhat run scripts/deploy.ts --network sepolia
 ```
 
-Copy all 5 addresses printed to your `.env`:
+Copy the printed addresses into `.env` (`AGENT_REGISTRY_ADDRESS`, `HACKATHON_VAULT_ADDRESS`, `RISK_ROUTER_ADDRESS`, `REPUTATION_REGISTRY_ADDRESS`, `VALIDATION_REGISTRY_ADDRESS`).
 
-```env
-AGENT_REGISTRY_ADDRESS=...
-HACKATHON_VAULT_ADDRESS=...
-RISK_ROUTER_ADDRESS=...
-REPUTATION_REGISTRY_ADDRESS=...
-VALIDATION_REGISTRY_ADDRESS=...
-```
-
-### 2. Register your agent
+### 2. Register the agent
 
 ```bash
 npm run register
 ```
 
-Copy the printed `AGENT_ID` to your `.env`:
+Set `AGENT_ID` in `.env` from the script output.
 
-```env
-AGENT_ID=0
-```
+### 3. Run the agent (and optional dashboard)
 
-### 3. Run the agent + dashboard
+Start the **root** Python API first (`uvicorn backend.api:app --reload --port 8000` from the repo root).
 
-In two separate terminals:
+Then, in `erc8004/`:
 
 ```bash
 # Terminal 1 — agent loop
 npm run run-agent
 
-# Terminal 2 — live dashboard at http://localhost:3000
+# Terminal 2 — dashboard (default http://localhost:3000)
 npm run dashboard
 ```
 
-You'll see output like:
-
-```
-[agent] Starting agent loop
-[agent] agentId:  0
-[agent] Pair:     XBTUSD
-[agent] Interval: 30s
-
-[agent] XBTUSD @ $66,422.6
-[2026-03-27T11:02:50.000Z] HOLD XBTUSD @ $66,422.60
-  Confidence: 50%
-  Reason: No clear momentum (0.09% change). Holding current position.
-  Market: bid=66421, ask=66421.1, spread=0.0002%, vol=2764.35
-
-────────────────────────────────────────────────────────────────────────
-CHECKPOINT — HOLD XBTUSD
-  Agent:     0
-  Timestamp: 2026-03-27T11:02:50.000Z
-  Amount:    $0
-  Price:     $66422.6
-  Confidence: 50%
-  Sig:       0x4f93af3b...c66c3bb31c
-  Signer:    0xYourAgentWallet
-────────────────────────────────────────────────────────────────────────
-
-[agent] Checkpoint posted to ValidationRegistry: 0xa6993f19...
-```
-
-The agent warms up for the first 5 ticks (collecting price samples), then starts evaluating momentum. It HOLDs when price change is below the threshold (~1%), and BUYs/SELLs on clear momentum. Every decision — including HOLDs — generates a signed checkpoint posted to the ValidationRegistry on Sepolia.
-
-You'll see live market data, trade decisions, human-readable explanations, and signed checkpoints printed to the console. Every checkpoint is appended to `checkpoints.jsonl`.
+Other scripts: `npm run inspect-onchain`, `npm run claim`, `npm run deploy`, `npm test`.
 
 ---
 
-## Swap in your own strategy
+## Swapping the strategy
 
-Edit `src/agent/index.ts`:
+The agent entrypoint is `src/agent/index.ts`. By default it instantiates **`PythonApiStrategy`** so decisions stay in sync with the Python multi-agent pipeline.
 
-```typescript
-// Replace this:
-import { MomentumStrategy } from "./strategy.js";
-const strategy = new MomentumStrategy(5, 100);
-
-// With your own:
-import { MyStrategy } from "./my-strategy.js";
-const strategy = new MyStrategy();
-```
-
-Your strategy only needs to implement one method:
+To use a purely local TypeScript strategy instead, change the import and the `strategy` construction at the bottom of `index.ts` (see `src/agent/strategy.ts` for the `TradingStrategy` interface and examples).
 
 ```typescript
 interface TradingStrategy {
@@ -152,17 +106,15 @@ interface TradingStrategy {
 }
 ```
 
-See `src/agent/strategy.ts` for examples including LLM strategy stubs.
-
 ---
 
 ## Tutorial
 
-Step-by-step walkthrough in the `tutorial/` folder:
+Step-by-step notes in `tutorial/`:
 
 1. [What is ERC-8004 and why does it matter?](tutorial/01-erc8004-intro.md)
 2. [Registering your agent on-chain](tutorial/02-register-agent.md)
-3. [Connecting to Kraken API](tutorial/03-kraken-connection.md)
+3. [Connecting to Kraken](tutorial/03-kraken-connection.md)
 4. [The Vault and Risk Router](tutorial/04-vault-riskrouter.md)
 5. [Building the explanation layer](tutorial/05-explanation-layer.md)
 6. [EIP-712 signed checkpoints](tutorial/06-eip712-checkpoints.md)
@@ -170,34 +122,23 @@ Step-by-step walkthrough in the `tutorial/` folder:
 
 ---
 
-## Project structure
+## Project structure (high level)
 
 ```
-contracts/
-  AgentRegistry.sol      # ERC-8004 agent identity registry
-  HackathonVault.sol     # Capital vault with per-agent allocation
-  RiskRouter.sol         # On-chain risk validation
-
+contracts/           # Solidity: registry, vault, risk router, …
 src/
-  types/index.ts         # Shared TypeScript interfaces
-  agent/
-    index.ts             # Main agent loop
-    identity.ts          # ERC-8004 registration
-    strategy.ts          # TradingStrategy interface + example strategies
-  exchange/
-    kraken.ts            # Kraken CLI client (paper + live)
-  onchain/
-    vault.ts             # Vault contract interactions
-    riskRouter.ts        # RiskRouter contract interactions
-  explainability/
-    reasoner.ts          # Human-readable explanation formatter
-    checkpoint.ts        # EIP-712 checkpoint generation + verification
-
+  types/             # Shared TS types
+  agent/             # index.ts loop, identity, python-api-strategy, …
+  exchange/kraken.ts # Kraken CLI wrapper
+  onchain/           # Vault, RiskRouter, registries
+  explainability/    # Reasoning + EIP-712 checkpoints
 scripts/
-  deploy.ts              # Deploy all contracts to Sepolia
-  register-agent.ts      # Register agent on-chain
-  run-agent.ts           # Run the agent
-  dashboard.ts           # Live web dashboard (http://localhost:3000)
+  deploy.ts
+  register-agent.ts
+  run-agent.ts
+  dashboard.ts
+  inspect-onchain.ts
+  claim-allocation.ts
 ```
 
 ---
@@ -220,4 +161,4 @@ console.log(valid); // true
 
 ## License
 
-MIT
+The **overall repository** is licensed under the MIT License — see the root [`LICENSE`](../LICENSE). Third-party tutorial/template portions retain their original terms where applicable.
