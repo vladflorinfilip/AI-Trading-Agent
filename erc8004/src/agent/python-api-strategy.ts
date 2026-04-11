@@ -46,10 +46,10 @@ export class PythonApiStrategy implements TradingStrategy {
       const json = (await res.json()) as PipelineResponse;
 
       const action = this.parseAction(json.decision);
-      const reasoning = this.buildCheckpointReasoning(
-        json.stages,
-        json.decision
-      );
+      const traderStage = json.stages?.[1];
+      const riskStage = json.stages?.[2];
+      const reasoning =
+        traderStage?.response ?? json.decision ?? "No reasoning returned";
 
       const pipelineAmount = json.amount_usd;
       const atrSized = json.atr
@@ -59,12 +59,20 @@ export class PythonApiStrategy implements TradingStrategy {
         : (pipelineAmount && pipelineAmount > 0) ? pipelineAmount
         : atrSized ?? this.tradeAmountUsd;
 
+      const riskConf = this.normalizeRiskConfidence(
+        json.risk_confidence_score ?? riskStage?.risk_confidence_score
+      );
+      const confidence =
+        riskConf !== null
+          ? riskConf / 100
+          : this.inferConfidence(action, reasoning);
+
       return {
         action,
         asset: data.pair.replace("USD", ""),
         pair: data.pair,
         amount: tradeAmount,
-        confidence: this.inferConfidence(action, reasoning),
+        confidence,
         reasoning,
       };
     } catch (err) {
@@ -136,6 +144,14 @@ export class PythonApiStrategy implements TradingStrategy {
     return "HOLD";
   }
 
+  /** Pipeline may attach risk manager structured confidence (0–100). */
+  private normalizeRiskConfidence(raw: unknown): number | null {
+    if (raw === undefined || raw === null) return null;
+    const n = typeof raw === "string" ? parseFloat(raw) : Number(raw);
+    if (!Number.isFinite(n)) return null;
+    return Math.min(100, Math.max(0, n));
+  }
+
   private inferConfidence(
     action: TradeDecision["action"],
     reasoning: string
@@ -160,7 +176,7 @@ export class PythonApiStrategy implements TradingStrategy {
       asset: data.pair.replace("USD", ""),
       pair: data.pair,
       amount: 0,
-      confidence: 0.85,
+      confidence: 0.90,
       reasoning: `[FALLBACK] ${reason}. Holding position.`,
     };
   }
@@ -170,10 +186,13 @@ interface PipelineResponse {
   decision: string;
   amount_usd?: number;
   atr?: number;
+  /** Risk manager structured output: confidence in verdicts, 0–100 */
+  risk_confidence_score?: number;
   stages: Array<{
     agent: string;
     response: string;
     duration_ms: number;
+    risk_confidence_score?: number;
   }>;
   total_duration_ms: number;
   id?: string;

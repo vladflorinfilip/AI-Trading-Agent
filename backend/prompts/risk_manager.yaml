@@ -64,6 +64,10 @@ system_prompt: |
      health (total drawdown, concentration concerns, general posture).
 
 constraints:
+  - >-
+    After any tool calls, the pipeline requests a single JSON object with keys
+    output_text (full narrative including the RISK DECISIONS block) and
+    confidence_score (integer 0–100, your confidence that these verdicts are sound).
   - Never execute trades yourself
   - Portfolio data is pre-loaded — do not call paper_balance or paper_history
   - VETO buys when the target asset exceeds 40% of portfolio

@@ -8,6 +8,7 @@
     "register": "npx ts-node scripts/register-agent.ts",
     "run-agent": "npx ts-node scripts/run-agent.ts",
     "claim": "npx ts-node scripts/claim-allocation.ts",
+    "inspect-onchain": "node -e \"const m=+process.version.slice(1).split('.')[0];if(m<18){console.error('Node.js 18+ required (ethers v6 uses node:crypto). You have '+process.version+'. Try: cd erc8004 && nvm use');process.exit(1)}\" && npx ts-node scripts/inspect-onchain.ts",
     "dashboard": "npx ts-node scripts/dashboard.ts",
     "test": "npx hardhat test"
   },

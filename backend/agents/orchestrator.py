@@ -388,6 +388,13 @@ class Orchestrator:
             "decisions": raw_decisions,
             "total_duration_ms": sum(s["duration_ms"] for s in stages),
         }
+        risk_stage = stages[2] if len(stages) > 2 else {}
+        rcs = risk_stage.get("risk_confidence_score")
+        if rcs is not None:
+            try:
+                result["risk_confidence_score"] = float(rcs)
+            except (TypeError, ValueError):
+                pass
         if atr is not None:
             result["atr"] = atr
 

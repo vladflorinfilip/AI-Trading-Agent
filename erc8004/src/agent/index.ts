@@ -10,8 +10,9 @@
  *      b. Submit TradeIntent to RiskRouter — get approval/rejection on-chain
  *      c. If approved: execute via Kraken CLI
  *   5. Generate EIP-712 signed checkpoint (includes intentHash)
- *   6. Post checkpoint hash to ValidationRegistry
- *   7. Append checkpoint to checkpoints.jsonl
+ *   6. Append checkpoint to checkpoints.jsonl
+ *   7. Post attestation to ValidationRegistry when risk confidence ≥ 95%
+ *   8. Publish on-chain metrics to the Python backend
  *
  * Swap strategy: change the strategy instantiation at the bottom of this file.
  */
@@ -23,7 +24,7 @@ import { ethers } from "ethers";
 import * as fs from "fs";
 import * as path from "path";
 
-import { TradingStrategy } from "../types/index";
+import { TradingStrategy, type TradeCheckpoint } from "../types/index";
 import { getAgentId, getAgentRegistration } from "./identity";
 import { PythonApiStrategy } from "./python-api-strategy";
 import { KrakenClient } from "../exchange/kraken";
@@ -45,6 +46,8 @@ const POLL_INTERVAL   = parseInt(process.env.POLL_INTERVAL_MS || "30000");
 const CHECKPOINTS_FILE = path.join(process.cwd(), "checkpoints.jsonl");
 const HOLD_INTENT_HASH = ethers.ZeroHash;
 const PYTHON_API_URL   = process.env.PYTHON_API_URL || "http://localhost:8000";
+/** Minimum decision.confidence (0–1) to submit an on-chain validation attestation */
+const MIN_ATTESTATION_CONFIDENCE = 0.95;
 
 function requireEnv(key: string): string {
   const val = process.env[key];
@@ -216,8 +219,28 @@ export async function runAgent(strategy: TradingStrategy) {
       console.log(formatCheckpointLog(checkpoint));
 
       // 6. Persist to checkpoints.jsonl
-      // Validation attestations are posted by the hackathon bot, not by us
       fs.appendFileSync(CHECKPOINTS_FILE, JSON.stringify(checkpoint) + "\n");
+
+      // 7. ValidationRegistry — self-attest signed checkpoint when risk confidence ≥ 95%
+      const cp = checkpoint as TradeCheckpoint & { checkpointHash: string };
+      if (decision.confidence >= MIN_ATTESTATION_CONFIDENCE) {
+        try {
+          const score = Math.min(100, Math.max(0, Math.round(decision.confidence * 100)));
+          const receipt = await validation.postCheckpointAttestation(
+            agentId,
+            cp.checkpointHash,
+            score,
+            `${decision.action} ${decision.pair} — checkpoint`,
+          );
+          console.log(`[agent] ValidationRegistry attestation posted (tx: ${receipt?.hash ?? "?"})`);
+        } catch (attErr) {
+          console.warn(`[agent] ValidationRegistry attestation failed:`, attErr);
+        }
+      } else {
+        console.log(
+          `[agent] Skipping ValidationRegistry: confidence ${(decision.confidence * 100).toFixed(1)}% < ${MIN_ATTESTATION_CONFIDENCE * 100}%`,
+        );
+      }
 
       // 8. Publish on-chain metrics to the Python backend for the dashboard
       await publishOnchainMetrics(agentId, validation, reputation, riskRouter);
