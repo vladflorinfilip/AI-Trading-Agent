@@ -5,9 +5,9 @@ A multi-agent crypto trading system built for the Lablab.ai hackathon. It combin
 LLM calls use **Google Gemini** and/or **Mistral** (selectable in `config.yaml` / `LLM_PROVIDER`). Market data and orders go through the **[Kraken CLI](https://github.com/kraken-oss/kraken-cli)** with **paper trading by default**.
 
 ## Links
-Website: https://ai-trading-agent-production-8681.up.railway.app/llm
-Video presentation: https://www.youtube.com/watch?v=Mm65MyX3e9U
-Surge submission: https://early.surge.xyz/discovery/ai-mystery-inc
+* Website: https://ai-trading-agent-production-8681.up.railway.app/llm
+* Video presentation: https://www.youtube.com/watch?v=Mm65MyX3e9U
+* Surge submission: https://early.surge.xyz/discovery/ai-mystery-inc
 
 ## Tech stack
 
